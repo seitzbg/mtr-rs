@@ -1,0 +1,11 @@
+[package]
+name = "mtr-core"
+description = "Sans-IO probing engine and statistics for mtr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mtr-proto.workspace = true
+thiserror.workspace = true

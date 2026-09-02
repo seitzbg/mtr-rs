@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = ["crates/mtr-proto", "crates/mtr-core", "crates/mtr"]
+exclude = ["crates/mtr-proto/fuzz"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-only"
+rust-version = "1.85"
+
+[workspace.dependencies]
+mtr-proto = { path = "crates/mtr-proto" }
+mtr-core = { path = "crates/mtr-core" }
+thiserror = "2"
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "signal", "net"] }
+clap = { version = "4", features = ["derive"] }
+hickory-resolver = "0.26"
+jiff = "0.2"
+nix = { version = "0.31", features = ["hostname", "net", "user"] }
+socket2 = { version = "0.6", features = ["all"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+proptest = "1"
