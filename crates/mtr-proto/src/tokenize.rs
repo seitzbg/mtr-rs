@@ -33,19 +33,20 @@ fn is_c_space(c: char) -> bool {
 
 /// `strtol(s, NULL, 10)` narrowed to `int` (cmdparse.c:94-99): optional sign, leading
 /// digits, trailing garbage ignored, no digits => 0, out of `long` range => error.
+/// Parses the signed literal directly to handle `LONG_MIN` correctly.
 pub fn parse_token(s: &str) -> Result<i32, ParseError> {
-    let (neg, rest) = match s.as_bytes().first() {
-        Some(b'-') => (true, &s[1..]),
-        Some(b'+') => (false, &s[1..]),
-        _ => (false, s),
+    let (sign, rest) = match s.as_bytes().first() {
+        Some(b'-') => ("-", &s[1..]),
+        Some(b'+') => ("", &s[1..]),
+        _ => ("", s),
     };
     let end = rest.bytes().take_while(u8::is_ascii_digit).count();
     let digits = &rest[..end];
     if digits.is_empty() {
         return Ok(0);
     }
-    let magnitude: i64 = digits.parse().map_err(|_| ParseError::TokenOverflow)?;
-    let value = if neg { -magnitude } else { magnitude };
+    let value_str = format!("{}{}", sign, digits);
+    let value: i64 = value_str.parse().map_err(|_| ParseError::TokenOverflow)?;
     Ok(value as i32) // C assigns the long to an int: wrapping narrowing
 }
 
@@ -129,5 +130,28 @@ mod tests {
             parse_token("99999999999999999999").unwrap_err(),
             ParseError::TokenOverflow
         );
+    }
+
+    #[test]
+    fn token_handles_long_min_boundary() {
+        // LONG_MIN narrows to int 0 (i64::MIN as i32 = 0)
+        assert_eq!(parse_token("-9223372036854775808").unwrap(), 0);
+        // Positive overflow
+        assert_eq!(
+            parse_token("9223372036854775808").unwrap_err(),
+            ParseError::TokenOverflow
+        );
+        // Negative overflow
+        assert_eq!(
+            parse_token("-9223372036854775809").unwrap_err(),
+            ParseError::TokenOverflow
+        );
+    }
+
+    #[test]
+    fn token_sign_only_returns_zero() {
+        // sign only, no digits → 0 like strtol
+        assert_eq!(parse_token("-").unwrap(), 0);
+        assert_eq!(parse_token("+").unwrap(), 0);
     }
 }
