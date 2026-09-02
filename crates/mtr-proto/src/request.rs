@@ -152,14 +152,18 @@ fn bad(name: &'static str, value: &str) -> ParseError {
     }
 }
 
+/// Every occurrence of `name` must parse (command.c validates each argument in order);
+/// the last valid one wins. Returns error for the first invalid occurrence.
 fn num<T: TryFrom<i64>>(l: &Line<'_>, name: &'static str) -> Result<Option<T>, ParseError> {
-    match l.last(name) {
-        None => Ok(None),
-        Some(v) => {
-            let n: i64 = v.parse().map_err(|_| bad(name, v))?;
-            T::try_from(n).map(Some).map_err(|_| bad(name, v))
+    let mut out = None;
+    for (k, v) in &l.args {
+        if *k != name {
+            continue;
         }
+        let n: i64 = v.parse().map_err(|_| bad(name, v))?;
+        out = Some(T::try_from(n).map_err(|_| bad(name, v))?);
     }
+    Ok(out)
 }
 
 impl Request {
@@ -244,19 +248,31 @@ impl Request {
 }
 
 fn parse_probe_params(l: &Line<'_>) -> Result<ProbeParams, ParseError> {
-    // command.c:338-346 decodes arguments in order, so the last ip-4/ip-6 wins and
-    // local-ip-* is parsed in the family selected by the target.
-    let mut target: Option<IpAddr> = None;
+    // command.c:338-346 decodes arguments in order, so the last ip-4/ip-6 wins.
+    // Like decode_probe_argument (command.c:171-287), we validate each occurrence
+    // in order and use the last valid value.
+    let mut target_raw: Option<(&str, &str)> = None;
     let mut local: Option<&str> = None;
+    let mut protocol_raw: Option<&str> = None;
+    let mut bit_pattern_raw: Option<&str> = None;
+
     for (k, v) in &l.args {
         match *k {
-            "ip-4" => target = Some(v.parse::<Ipv4Addr>().map_err(|_| bad("ip-4", v))?.into()),
-            "ip-6" => target = Some(v.parse::<Ipv6Addr>().map_err(|_| bad("ip-6", v))?.into()),
+            "ip-4" | "ip-6" => target_raw = Some((*k, *v)),
             "local-ip-4" | "local-ip-6" => local = Some(v),
+            "protocol" => protocol_raw = Some(v),
+            "bit-pattern" => bit_pattern_raw = Some(v),
             _ => {}
         }
     }
-    let target = target.ok_or(ParseError::MissingArgument("ip-4"))?;
+
+    // Parse target from the last occurrence, which determines the family.
+    let target: IpAddr = match target_raw {
+        None => return Err(ParseError::MissingArgument("ip-4")),
+        Some(("ip-4", v)) => v.parse::<Ipv4Addr>().map_err(|_| bad("ip-4", v))?.into(),
+        Some((_, v)) => v.parse::<Ipv6Addr>().map_err(|_| bad("ip-6", v))?.into(),
+    };
+
     let local_ip = match local {
         None => None,
         Some(v) if target.is_ipv4() => Some(
@@ -270,17 +286,34 @@ fn parse_probe_params(l: &Line<'_>) -> Result<ProbeParams, ParseError> {
                 .into(),
         ),
     };
-    let protocol = match l.last("protocol") {
-        None => Protocol::Icmp,
-        Some(p) => Protocol::parse(p).ok_or_else(|| bad("protocol", p))?,
-    };
-    let bit_pattern = match l.last("bit-pattern") {
-        None => None,
-        Some(v) => {
-            let n: i64 = v.parse().map_err(|_| bad("bit-pattern", v))?;
-            Some((n & 0xff) as u8) // memset() keeps the low byte (construct_unix.c:852)
+
+    // Validate all protocol occurrences; use the last one.
+    let protocol = if protocol_raw.is_none() {
+        Protocol::Icmp
+    } else {
+        let mut out = Protocol::Icmp;
+        for (k, v) in &l.args {
+            if *k == "protocol" {
+                out = Protocol::parse(v).ok_or_else(|| bad("protocol", v))?;
+            }
         }
+        out
     };
+
+    // Validate all bit-pattern occurrences; use the last one.
+    let bit_pattern = if bit_pattern_raw.is_none() {
+        None
+    } else {
+        let mut out = None;
+        for (k, v) in &l.args {
+            if *k == "bit-pattern" {
+                let n: i64 = v.parse().map_err(|_| bad("bit-pattern", v))?;
+                out = Some((n & 0xff) as u8); // memset() keeps the low byte
+            }
+        }
+        out
+    };
+
     Ok(ProbeParams {
         target,
         local_ip,
@@ -443,5 +476,66 @@ mod tests {
     fn round_trips() {
         let line = "33000 send-probe ip-4 192.0.2.1 local-ip-4 192.0.2.100 protocol tcp size 64 bit-pattern 0 tos 0 ttl 1 timeout 10 port 443\n";
         assert_eq!(Request::parse(line).unwrap().encode(), line);
+    }
+
+    #[test]
+    fn defers_ip_parsing_last_occurrence_wins() {
+        // FINDING 1: invalid ip-4 followed by valid ip-4 → uses last occurrence
+        let r = Request::parse("1 send-probe ip-4 not-an-ip ip-4 10.0.0.1").unwrap();
+        let RequestKind::SendProbe(p) = r.kind else {
+            panic!("not a probe")
+        };
+        assert_eq!(p.target, v4("10.0.0.1"));
+    }
+
+    #[test]
+    fn last_ip_family_wins() {
+        // Last ip-4/ip-6 determines the address family used
+        let r = Request::parse("1 send-probe ip-4 10.0.0.1 ip-6 2001:db8::1").unwrap();
+        let RequestKind::SendProbe(p) = r.kind else {
+            panic!("not a probe")
+        };
+        assert_eq!(p.target, "2001:db8::1".parse::<IpAddr>().unwrap());
+
+        // Reverse order
+        let r = Request::parse("1 send-probe ip-6 2001:db8::1 ip-4 10.0.0.1").unwrap();
+        let RequestKind::SendProbe(p) = r.kind else {
+            panic!("not a probe")
+        };
+        assert_eq!(p.target, v4("10.0.0.1"));
+    }
+
+    #[test]
+    fn local_ip_parsed_in_target_family_regardless_of_key() {
+        // local-ip value is parsed in the target's address family, not the key's family
+        let r = Request::parse("1 send-probe ip-4 10.0.0.1 local-ip-6 10.0.0.2").unwrap();
+        let RequestKind::SendProbe(p) = r.kind else {
+            panic!("not a probe")
+        };
+        assert_eq!(p.local_ip, Some(v4("10.0.0.2")));
+    }
+
+    #[test]
+    fn validates_all_numeric_occurrences() {
+        // First invalid occurrence is reported, even if later occurrences are valid
+        assert_eq!(
+            Request::parse("1 send-probe ip-4 10.0.0.1 ttl garbage ttl 3"),
+            Err(ParseError::InvalidValue {
+                name: "ttl",
+                value: "garbage".into()
+            })
+        );
+    }
+
+    #[test]
+    fn validates_all_protocol_occurrences() {
+        // First invalid protocol is reported
+        assert_eq!(
+            Request::parse("1 send-probe ip-4 10.0.0.1 protocol gre protocol udp"),
+            Err(ParseError::InvalidValue {
+                name: "protocol",
+                value: "gre".into()
+            })
+        );
     }
 }
