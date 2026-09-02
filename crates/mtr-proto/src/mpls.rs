@@ -14,27 +14,39 @@ pub struct MplsLabel {
     pub ttl: u8,
 }
 
-/// Parse the flat comma list `l,tc,s,ttl[,l,tc,s,ttl…]`. Like `parse_mpls_values()`, a
-/// trailing partial group is dropped, more than `MAX_LABELS` labels are truncated, and any
-/// non-numeric field is an error (the caller then keeps no labels).
+/// Parse the flat comma list `l,tc,s,ttl[,l,tc,s,ttl…]`. Like `parse_mpls_values()`,
+/// reads fields incrementally and stops consuming as soon as `MAX_LABELS` complete labels
+/// are collected, ignoring any trailing garbage after the cap. A trailing partial group
+/// (fewer than 4 values after the last complete label) is dropped. Any non-numeric field
+/// encountered before the cap is an error (the caller then keeps no labels).
 pub fn parse_mpls_list(s: &str) -> Result<Vec<MplsLabel>, ParseError> {
-    let mut values: Vec<u32> = Vec::new();
+    let mut labels: Vec<MplsLabel> = Vec::new();
+    let mut current_group: Vec<u32> = Vec::new();
+
     for field in s.split(',') {
+        // If we've already collected MAX_LABELS, stop consuming.
+        if labels.len() >= MAX_LABELS {
+            break;
+        }
+
         let v: u64 = field
             .parse()
             .map_err(|_| ParseError::MalformedMpls(s.to_string()))?;
-        values.push(v as u32); // C stores into unsigned long / uint8_t, truncating
+        current_group.push(v as u32); // C stores into unsigned long / uint8_t, truncating
+
+        // When we have a complete group of 4, form a label.
+        if current_group.len() == 4 {
+            labels.push(MplsLabel {
+                label: current_group[0],
+                tc: current_group[1] as u8,
+                bottom_of_stack: current_group[2] != 0,
+                ttl: current_group[3] as u8,
+            });
+            current_group.clear();
+        }
     }
-    Ok(values
-        .chunks_exact(4)
-        .take(MAX_LABELS)
-        .map(|g| MplsLabel {
-            label: g[0],
-            tc: g[1] as u8,
-            bottom_of_stack: g[2] != 0,
-            ttl: g[3] as u8,
-        })
-        .collect())
+
+    Ok(labels)
 }
 
 /// `format_mpls_string()`: `%u,%u,%u,%u` per label, labels joined by a bare comma.
@@ -114,5 +126,28 @@ mod tests {
             &mut s,
         );
         assert_eq!(s, "16001,0,1,1,7,3,0,9");
+    }
+
+    #[test]
+    fn stops_at_eight_labels_ignoring_garbage_after() {
+        // 32 valid values (8 labels) then ",x" — C stops reading at 8 labels, so Ok(8 labels).
+        let mut s = (0..32).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        s.push_str(",x");
+        assert_eq!(parse_mpls_list(&s).unwrap().len(), 8);
+    }
+
+    #[test]
+    fn drops_trailing_partial_and_stops_at_cap() {
+        // 35 valid values (8 labels + 3 stray) — stops at cap, partial dropped.
+        let many = (0..35).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        assert_eq!(parse_mpls_list(&many).unwrap().len(), 8);
+    }
+
+    #[test]
+    fn malformed_before_cap_is_error() {
+        // "1,x,3,4" — garbage in first group, error.
+        assert!(parse_mpls_list("1,x,3,4").is_err());
+        // "1,2,3,4,x" — garbage after a complete label but before cap, error.
+        assert!(parse_mpls_list("1,2,3,4,x").is_err());
     }
 }

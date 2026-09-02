@@ -79,8 +79,9 @@ pub enum ResponseKind {
     NoRouteHost,
     /// Wire name keeps upstream's typo: `wait-tcp-respone-timeout`.
     WaitTcpResponseTimeout,
+    /// `errno` is informational; `None` when the helper sent none.
     UnexpectedError {
-        errno: i64,
+        errno: Option<i64>,
     },
     /// Always carries token 0.
     CommandParseError,
@@ -185,8 +186,8 @@ impl Response {
             ResponseKind::InvalidArgument { reason: Some(r) } => {
                 let _ = write!(s, " reason {}", r.as_str());
             }
-            ResponseKind::UnexpectedError { errno } => {
-                let _ = write!(s, " errno {errno}");
+            ResponseKind::UnexpectedError { errno: Some(n) } => {
+                let _ = write!(s, " errno {n}");
             }
             _ => {}
         }
@@ -223,7 +224,7 @@ impl Response {
             "no-route-network" => ResponseKind::NoRouteNetwork,
             "wait-tcp-respone-timeout" => ResponseKind::WaitTcpResponseTimeout,
             "unexpected-error" => ResponseKind::UnexpectedError {
-                errno: l.first("errno").and_then(|v| v.parse().ok()).unwrap_or(0),
+                errno: l.first("errno").and_then(|v| v.parse().ok()),
             },
             "command-parse-error" => ResponseKind::CommandParseError,
             "command-buffer-overflow" => ResponseKind::CommandBufferOverflow,
@@ -370,7 +371,7 @@ mod tests {
             ("5 no-reply", ResponseKind::NoReply),
             (
                 "5 unexpected-error errno 22",
-                ResponseKind::UnexpectedError { errno: 22 },
+                ResponseKind::UnexpectedError { errno: Some(22) },
             ),
             (
                 "5 invalid-argument",
@@ -418,7 +419,7 @@ mod tests {
             ResponseKind::PermissionDenied,
             ResponseKind::AddressInUse,
             ResponseKind::AddressNotAvailable,
-            ResponseKind::UnexpectedError { errno: 1 },
+            ResponseKind::UnexpectedError { errno: Some(1) },
         ] {
             assert!(k.is_fatal_for_client(), "{k:?}");
         }
@@ -430,5 +431,46 @@ mod tests {
         ] {
             assert!(!k.is_fatal_for_client(), "{k:?}");
         }
+    }
+
+    #[test]
+    fn unexpected_error_errno_is_optional() {
+        // Parse with errno present.
+        let r = Response::parse("5 unexpected-error errno 22").unwrap();
+        assert_eq!(r.kind, ResponseKind::UnexpectedError { errno: Some(22) });
+
+        // Parse without errno.
+        let r = Response::parse("5 unexpected-error").unwrap();
+        assert_eq!(r.kind, ResponseKind::UnexpectedError { errno: None });
+
+        // Encode with errno.
+        let r = Response {
+            token: 5,
+            kind: ResponseKind::UnexpectedError { errno: Some(22) },
+        };
+        assert_eq!(r.encode(), "5 unexpected-error errno 22\n");
+
+        // Encode without errno.
+        let r = Response {
+            token: 5,
+            kind: ResponseKind::UnexpectedError { errno: None },
+        };
+        assert_eq!(r.encode(), "5 unexpected-error\n");
+
+        // Round trip both forms.
+        assert_eq!(
+            Response::parse("5 unexpected-error errno 22").unwrap(),
+            Response {
+                token: 5,
+                kind: ResponseKind::UnexpectedError { errno: Some(22) }
+            }
+        );
+        assert_eq!(
+            Response::parse("5 unexpected-error").unwrap(),
+            Response {
+                token: 5,
+                kind: ResponseKind::UnexpectedError { errno: None }
+            }
+        );
     }
 }
