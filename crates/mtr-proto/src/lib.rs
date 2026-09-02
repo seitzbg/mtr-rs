@@ -4,9 +4,11 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod request;
 pub mod tokenize;
 
 pub use error::ParseError;
+pub use request::{Feature, ProbeParams, Protocol, Request, RequestKind};
 
 /// `MAX_COMMAND_ARGUMENTS` in packet/cmdparse.h.
 pub const MAX_ARGUMENTS: usize = 16;
