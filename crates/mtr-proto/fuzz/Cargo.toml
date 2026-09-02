@@ -1,0 +1,26 @@
+[package]
+name = "mtr-proto-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mtr-proto = { path = ".." }
+
+[[bin]]
+name = "parse_request"
+path = "fuzz_targets/parse_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_response"
+path = "fuzz_targets/parse_response.rs"
+test = false
+doc = false
+bench = false
