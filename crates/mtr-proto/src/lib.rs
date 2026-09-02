@@ -4,11 +4,15 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod mpls;
 pub mod request;
+pub mod response;
 pub mod tokenize;
 
 pub use error::ParseError;
+pub use mpls::MplsLabel;
 pub use request::{Feature, ProbeParams, Protocol, Request, RequestKind};
+pub use response::{InvalidReason, ProbeResult, Response, ResponseKind};
 
 /// `MAX_COMMAND_ARGUMENTS` in packet/cmdparse.h.
 pub const MAX_ARGUMENTS: usize = 16;
