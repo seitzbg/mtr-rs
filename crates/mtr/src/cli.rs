@@ -11,6 +11,7 @@ use mtr_core::{Config, MAX_PACKET, MIN_PACKET, fields};
 use mtr_proto::Protocol;
 
 use crate::options::split_mtr_options;
+use crate::tui::palette::RttThresholds;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
@@ -108,6 +109,20 @@ pub fn split_target_port(name: &str) -> Result<Target, String> {
         name: name.to_string(),
         port: 0,
     })
+}
+
+/// `--rtt-thresholds 30,100,200,500`: the four millisecond bounds of the RTT colour ramp.
+pub fn parse_rtt_thresholds(spec: &str) -> Result<RttThresholds, String> {
+    let mut ms = Vec::new();
+    for item in spec.split(',') {
+        let n = parse_c_long(item.trim())
+            .map_err(|_| format!("invalid rtt threshold '{}' in '{spec}'", item.trim()))?;
+        if n < 0 {
+            return Err("rtt thresholds must be positive".to_string());
+        }
+        ms.push(n as u64);
+    }
+    RttThresholds::from_millis(&ms)
 }
 
 /// `parse_ipinfo_fields()` (ui/asn.c:344-392).
@@ -303,6 +318,13 @@ pub struct Args {
     /// Disable colour in the TUI (NO_COLOR is honoured too)
     #[arg(long = "no-color")]
     pub no_color: bool,
+    /// RTT colour ramp bounds in milliseconds (green,yellow,magenta,red)
+    #[arg(
+        long = "rtt-thresholds",
+        value_name = "MS,MS,MS,MS",
+        value_parser = parse_rtt_thresholds
+    )]
+    pub rtt_thresholds: Option<RttThresholds>,
     /// Target hosts (HOSTNAME[:PORT] with -u/-T/-S)
     #[arg(value_name = "HOSTNAME")]
     pub hosts: Vec<String>,
@@ -340,6 +362,7 @@ pub struct Options {
     pub ipinfo_provider6: String,
     pub ascii: bool,
     pub color: bool,
+    pub rtt_thresholds: RttThresholds,
     pub config: Config,
 }
 
@@ -513,6 +536,7 @@ impl Args {
             ipinfo_provider6: self.ipinfo_provider6.clone(),
             ascii: self.ascii,
             color: !self.no_color && std::env::var_os("NO_COLOR").is_none(),
+            rtt_thresholds: self.rtt_thresholds.unwrap_or_default(),
             config,
         })
     }
@@ -883,6 +907,38 @@ mod tests {
             .unwrap();
         assert_eq!(o.config.max_ping, 5);
         assert!(build_argv(Some("'"), std::iter::empty::<String>()).is_err());
+    }
+
+    #[test]
+    fn rtt_thresholds_flag() {
+        assert_eq!(
+            opts(&["--rtt-thresholds", "5,10,20,40", "h"])
+                .unwrap()
+                .rtt_thresholds
+                .to_millis(),
+            [5, 10, 20, 40]
+        );
+        assert_eq!(
+            opts(&["h"]).unwrap().rtt_thresholds,
+            RttThresholds::default()
+        );
+        assert_eq!(
+            parse_rtt_thresholds("5,10,20"),
+            Err("rtt thresholds need exactly 4 values, got 3".to_string())
+        );
+        assert_eq!(
+            parse_rtt_thresholds("5, 10, 20, 40").map(|t| t.to_millis()),
+            Ok([5, 10, 20, 40])
+        );
+        assert_eq!(
+            parse_rtt_thresholds("5,x,20,40"),
+            Err("invalid rtt threshold 'x' in '5,x,20,40'".to_string())
+        );
+        assert_eq!(
+            parse_rtt_thresholds("5,-10,20,40"),
+            Err("rtt thresholds must be positive".to_string())
+        );
+        assert!(Args::try_parse_from(["mtr", "--rtt-thresholds", "5,4,3,2", "h"]).is_err());
     }
 
     #[test]

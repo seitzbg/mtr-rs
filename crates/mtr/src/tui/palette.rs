@@ -11,14 +11,72 @@ pub enum Depth {
     Mono,
 }
 
+/// The four upper bounds, in microseconds, that split the RTT colour ramp into green / yellow /
+/// magenta / red / bold red. Configurable through `--rtt-thresholds` and `display.rtt_thresholds_ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RttThresholds {
+    pub us: [u32; 4],
+}
+
+pub const DEFAULT_RTT_THRESHOLDS_MS: [u64; 4] = [30, 100, 200, 500];
+
+impl Default for RttThresholds {
+    fn default() -> Self {
+        RttThresholds::from_millis(&DEFAULT_RTT_THRESHOLDS_MS).expect("valid defaults")
+    }
+}
+
+impl RttThresholds {
+    /// Exactly four values, each positive, strictly ascending, and small enough to fit a `u32` of
+    /// microseconds (the unit every RTT in the engine is kept in).
+    pub fn from_millis(ms: &[u64]) -> Result<Self, String> {
+        if ms.len() != 4 {
+            return Err(format!(
+                "rtt thresholds need exactly 4 values, got {}",
+                ms.len()
+            ));
+        }
+        let mut us = [0u32; 4];
+        for (i, &m) in ms.iter().enumerate() {
+            if m == 0 {
+                return Err("rtt thresholds must be positive".to_string());
+            }
+            if i > 0 && m <= ms[i - 1] {
+                return Err(format!(
+                    "rtt thresholds must be ascending: {} is not greater than {}",
+                    m,
+                    ms[i - 1]
+                ));
+            }
+            us[i] = u32::try_from(m.saturating_mul(1000))
+                .map_err(|_| format!("rtt threshold out of range: {m}"))?;
+        }
+        Ok(RttThresholds { us })
+    }
+
+    pub fn to_millis(self) -> [u64; 4] {
+        self.us.map(|u| u64::from(u) / 1000)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub depth: Depth,
+    pub rtt_thresholds: RttThresholds,
 }
 
 impl Palette {
     pub fn new(depth: Depth) -> Self {
-        Palette { depth }
+        Palette {
+            depth,
+            rtt_thresholds: RttThresholds::default(),
+        }
+    }
+
+    /// Builder used by `run_target`; keeps `new`/`detect` unchanged for every other caller.
+    pub fn with_rtt_thresholds(mut self, t: RttThresholds) -> Self {
+        self.rtt_thresholds = t;
+        self
     }
 
     /// `color == false` (`--no-color` / `NO_COLOR`) → Mono; otherwise crossterm's colour count
@@ -80,14 +138,16 @@ impl Palette {
         }
     }
 
-    /// RTT cell/bar colour on fixed, path-independent thresholds (deviation 25): < 30 ms green,
-    /// < 100 ms yellow, < 200 ms magenta, < 500 ms red, >= 500 ms bold red.
+    /// RTT cell/bar colour on absolute, path-independent thresholds (deviation 25). The defaults
+    /// are < 30 ms green, < 100 ms yellow, < 200 ms magenta, < 500 ms red, >= 500 ms bold red;
+    /// `display.rtt_thresholds_ms` / `--rtt-thresholds` replace the four bounds.
     pub fn rtt(&self, us: u32) -> Style {
+        let t = self.rtt_thresholds.us;
         match us {
-            u if u < 30_000 => self.green(),
-            u if u < 100_000 => self.yellow(),
-            u if u < 200_000 => self.magenta(),
-            u if u < 500_000 => self.red(),
+            u if u < t[0] => self.green(),
+            u if u < t[1] => self.yellow(),
+            u if u < t[2] => self.magenta(),
+            u if u < t[3] => self.red(),
             _ => self.red().add_modifier(Modifier::BOLD),
         }
     }
@@ -161,6 +221,47 @@ mod tests {
         assert!(p.loss(100_000).add_modifier.contains(Modifier::BOLD));
         assert_eq!(p.rtt(999_999).fg, None);
         assert!(p.selected().add_modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn threshold_validation() {
+        assert_eq!(
+            RttThresholds::from_millis(&[30, 100, 200]).unwrap_err(),
+            "rtt thresholds need exactly 4 values, got 3"
+        );
+        assert_eq!(
+            RttThresholds::from_millis(&[0, 100, 200, 500]).unwrap_err(),
+            "rtt thresholds must be positive"
+        );
+        assert_eq!(
+            RttThresholds::from_millis(&[30, 30, 200, 500]).unwrap_err(),
+            "rtt thresholds must be ascending: 30 is not greater than 30"
+        );
+        assert_eq!(
+            RttThresholds::from_millis(&[30, 100, 200, 5_000_000]).unwrap_err(),
+            "rtt threshold out of range: 5000000"
+        );
+        let t = RttThresholds::from_millis(&[5, 10, 20, 40]).unwrap();
+        assert_eq!(t.us, [5_000, 10_000, 20_000, 40_000]);
+        assert_eq!(t.to_millis(), [5, 10, 20, 40]);
+        assert_eq!(RttThresholds::default().to_millis(), [30, 100, 200, 500]);
+    }
+
+    #[test]
+    fn rtt_colours_follow_custom_thresholds() {
+        let p = Palette::new(Depth::Ansi16)
+            .with_rtt_thresholds(RttThresholds::from_millis(&[1, 2, 3, 4]).unwrap());
+        assert_eq!(p.rtt(999).fg, Some(Color::Green));
+        assert_eq!(p.rtt(1_000).fg, Some(Color::Yellow));
+        assert_eq!(p.rtt(2_000).fg, Some(Color::Magenta));
+        assert_eq!(p.rtt(3_000).fg, Some(Color::Red));
+        assert!(!p.rtt(3_999).add_modifier.contains(Modifier::BOLD));
+        assert!(p.rtt(4_000).add_modifier.contains(Modifier::BOLD));
+        // the default palette is unaffected
+        assert_eq!(
+            Palette::new(Depth::Ansi16).rtt(1_000).fg,
+            Some(Color::Green)
+        );
     }
 
     #[test]

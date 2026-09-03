@@ -214,7 +214,7 @@ async fn run_target(
                 .map_err(|e| Fatal::Abort(format!("terminal: {e}")))?;
             let tui_opts = tui::TuiOptions {
                 glyphs: tui::Glyphs::select(opts.ascii),
-                palette: tui::Palette::detect(opts.color),
+                palette: tui::Palette::detect(opts.color).with_rtt_thresholds(opts.rtt_thresholds),
                 is_root,
                 local_hostname: &local_hostname,
                 target_name: &t.name,
