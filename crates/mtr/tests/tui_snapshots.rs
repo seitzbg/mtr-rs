@@ -26,12 +26,20 @@ fn unicode_80x24_rtt_tab() {
 fn ascii_rtt_and_addresses_tabs() {
     let mut f = snapshot_fixture(true);
     f.ui.selected = 2;
-    // deviation 23: the plot area keeps ratatui's line-drawing axes and `Marker::Dot`
-    insta::assert_snapshot!("ascii_80x24_rtt", render(&f, 80, 24));
+    // deviation 23: `--ascii` draws the plot itself (`*` on `|`/`-`/`+`) instead of using ratatui's
+    // Chart, so the whole screen — chart included — is ASCII
+    let rtt = render(&f, 80, 24);
+    assert!(
+        rtt.is_ascii(),
+        "non-ASCII in the --ascii RTT screen:\n{rtt}"
+    );
+    assert!(rtt.contains('*'), "no plotted point:\n{rtt}");
+    insta::assert_snapshot!("ascii_80x24_rtt", rtt);
     f.ui.selected = 0;
     f.ui.tab = DetailTab::Addresses;
-    // the pure-ASCII acceptance snapshot (Step 3 greps this one)
-    insta::assert_snapshot!("ascii_80x24_addresses", render(&f, 80, 24));
+    let addresses = render(&f, 80, 24);
+    assert!(addresses.is_ascii(), "non-ASCII screen:\n{addresses}");
+    insta::assert_snapshot!("ascii_80x24_addresses", addresses);
 }
 
 #[test]
@@ -73,5 +81,7 @@ fn help_overlay_prompt_and_too_small() {
 fn ascii_help_overlay() {
     let mut f = snapshot_fixture(true);
     f.ui.help = true;
-    insta::assert_snapshot!("ascii_80x24_help", render(&f, 80, 24));
+    let help = render(&f, 80, 24);
+    assert!(help.is_ascii(), "non-ASCII screen:\n{help}");
+    insta::assert_snapshot!("ascii_80x24_help", help);
 }

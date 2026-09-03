@@ -19,6 +19,9 @@ pub struct Glyphs {
     pub ellipsis: &'static str,
     pub border: border::Set<'static>,
     pub marker: Marker,
+    /// True for the `--ascii` set: renderers that cannot express themselves through the glyphs
+    /// above (the RTT plot) switch to a pure-ASCII code path.
+    pub ascii: bool,
 }
 
 pub static UNICODE: Glyphs = Glyphs {
@@ -32,6 +35,7 @@ pub static UNICODE: Glyphs = Glyphs {
     ellipsis: "…",
     border: border::ROUNDED,
     marker: Marker::Braille,
+    ascii: false,
 };
 
 pub static ASCII: Glyphs = Glyphs {
@@ -54,6 +58,7 @@ pub static ASCII: Glyphs = Glyphs {
         horizontal_bottom: "-",
     },
     marker: Marker::Dot,
+    ascii: true,
 };
 
 impl Glyphs {
@@ -84,6 +89,7 @@ mod tests {
         assert_eq!(UNICODE.divider, "│");
         assert_eq!((UNICODE.ellipsis, ASCII.ellipsis), ("…", "~"));
         assert!(ASCII.bars.iter().all(|b| b.is_ascii() && b.len() == 1));
+        assert!(ASCII.ascii && !UNICODE.ascii);
         assert!(std::ptr::eq(Glyphs::select(true), &ASCII));
         assert!(std::ptr::eq(Glyphs::select(false), &UNICODE));
     }

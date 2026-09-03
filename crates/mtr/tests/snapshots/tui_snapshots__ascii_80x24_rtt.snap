@@ -1,6 +1,6 @@
 ---
 source: crates/mtr/tests/tui_snapshots.rs
-expression: "render(&f, 80, 24)"
+expression: rtt
 ---
 "mtr 0.1.0  ->  target.example (192.0.2.10)   ICMP/IPv4  i=1s  Snt 4     12:34:56"
 "   #. Host                   Loss%   Snt   Last   Avg  Best  Wrst StDev   Recent"
@@ -17,12 +17,12 @@ expression: "render(&f, 80, 24)"
 "                                                                                "
 "                                                                                "
 "+ Hop 3  192.0.2.10  AS64500  EXAMPLE-AS ------------ RTT | Addresses | Log ---+"
-"|5 ms│                                                                         |"
-"|    │                                                                         |"
-"| 2.5│                                                                      •••|"
-"|   0│                                                                         |"
-"|    └─────────────────────────────────────────────────────────────────────────|"
-"|  -6s                                                                      now|"
+"|5 ms|                                                                         |"
+"| 2.5|                                                                       **|"
+"|    |                                                                         |"
+"|   0|                                                                         |"
+"|    +-------------------------------------------------------------------------|"
+"|     -6s                                                                   now|"
 "|                                                                              |"
 "+------------------------------------------------------------------------------+"
 "q quit  ? help  p pause  Space resume  r reset  Enter pane  Tab tab             "

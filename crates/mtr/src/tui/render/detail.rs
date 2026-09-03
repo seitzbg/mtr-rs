@@ -162,6 +162,82 @@ fn render_rtt(view: &View, hop: &Hop, inner: Rect, buf: &mut Buffer) {
     }
     let label_w = y_label_width(data.ceiling);
     let pal = view.palette;
+    if view.glyphs.ascii {
+        // deviation 23: ratatui's Chart draws its axes with `─│└` and its points with the marker
+        // set, none of which is ASCII, so `--ascii` gets its own scatter over the same data.
+        render_rtt_ascii(view, &data, label_w, columns, chart_area, buf);
+    } else {
+        render_rtt_chart(view, &data, columns, chart_area, buf);
+    }
+    // loss row under the plot, aligned with the plotting columns
+    let x0 = loss_area.x + label_w;
+    for (c, lost) in data.lost_columns.iter().enumerate() {
+        if *lost {
+            let x = x0 + c as u16;
+            if x < loss_area.x + loss_area.width {
+                buf.set_string(x, loss_area.y, view.glyphs.lost_mark, pal.loss(100_000));
+            }
+        }
+    }
+}
+
+/// `*` points on `|`/`-`/`+` axes: the same picture the ratatui `Chart` draws, in ASCII only.
+fn render_rtt_ascii(
+    view: &View,
+    data: &ChartData,
+    label_w: u16,
+    columns: usize,
+    area: Rect,
+    buf: &mut Buffer,
+) {
+    let pal = view.palette;
+    // two rows go to the axis line and the x labels, one column of the label block to the y axis
+    if area.height < 3 || area.width <= label_w || label_w == 0 {
+        return;
+    }
+    let plot_h = area.height - 2;
+    let axis_x = area.x + label_w - 1;
+    let plot_x = area.x + label_w;
+    let axis_y = area.y + plot_h;
+    let cols = columns.min(usize::from(area.width - label_w));
+    let lab_w = usize::from(label_w - 1);
+    let mut y_label = |row: u16, text: String| {
+        buf.set_string(area.x, row, format!("{text:>lab_w$}"), pal.dim());
+    };
+    // rows run top (ceiling) to bottom (0); the half label goes on the row a half-ceiling point
+    // would be plotted on, so label and plot agree
+    let row_of = |frac: f64| area.y + plot_h - 1 - (frac * f64::from(plot_h - 1)).round() as u16;
+    y_label(area.y, format!("{} ms", data.ceiling));
+    if plot_h >= 2 {
+        y_label(area.y + plot_h - 1, "0".to_string());
+    }
+    let half = row_of(0.5);
+    if half != area.y && half != area.y + plot_h - 1 {
+        y_label(half, format!("{}", data.ceiling / 2.0));
+    }
+    for r in 0..plot_h {
+        buf.set_string(axis_x, area.y + r, "|", pal.dim());
+    }
+    buf.set_string(axis_x, axis_y, "+", pal.dim());
+    buf.set_string(plot_x, axis_y, "-".repeat(cols), pal.dim());
+    for &(x, y) in &data.points {
+        let c = x as usize / 2;
+        if c >= cols {
+            continue;
+        }
+        let frac = (y / data.ceiling).clamp(0.0, 1.0);
+        buf.set_string(plot_x + c as u16, row_of(frac), "*", pal.accent());
+    }
+    let left = format!("-{:.0}s", data.span_s);
+    buf.set_string(plot_x, axis_y + 1, &left, pal.dim());
+    let now_w = 3u16;
+    if cols as u16 > left.len() as u16 + now_w {
+        buf.set_string(plot_x + cols as u16 - now_w, axis_y + 1, "now", pal.dim());
+    }
+}
+
+fn render_rtt_chart(view: &View, data: &ChartData, columns: usize, area: Rect, buf: &mut Buffer) {
+    let pal = view.palette;
     let ds = Dataset::default()
         .data(&data.points)
         .marker(view.glyphs.marker)
@@ -187,17 +263,7 @@ fn render_rtt(view: &View, hop: &Hop, inner: Rect, buf: &mut Buffer) {
         .x_axis(x_axis)
         .y_axis(y_axis)
         .legend_position(None)
-        .render(chart_area, buf);
-    // loss row under the plot, aligned with the plotting columns
-    let x0 = loss_area.x + label_w;
-    for (c, lost) in data.lost_columns.iter().enumerate() {
-        if *lost {
-            let x = x0 + c as u16;
-            if x < loss_area.x + loss_area.width {
-                buf.set_string(x, loss_area.y, view.glyphs.lost_mark, pal.loss(100_000));
-            }
-        }
-    }
+        .render(area, buf);
 }
 
 /// Fixed Addresses columns: ASN, Count, Last, First seen and the five two-cell separators.
@@ -420,6 +486,27 @@ mod tests {
         let mut f = crate::testing::Fixture::around(engine, end + Duration::from_secs(1));
         f.ui.tab = DetailTab::Addresses;
         f
+    }
+
+    #[test]
+    fn ascii_rtt_pane_is_pure_ascii_and_plots_stars() {
+        let mut f = view_fixture();
+        f.ui.selected = 0;
+        f.ui.tab = DetailTab::Rtt;
+        f.glyphs = crate::tui::glyphs::Glyphs::select(true);
+        let area = Rect::new(0, 0, 80, 9);
+        let mut buf = Buffer::empty(area);
+        render(&f.view(), area, &mut buf);
+        let screen: String = (0..area.height).map(|y| row_text(&buf, y)).collect();
+        assert!(
+            screen.is_ascii(),
+            "non-ASCII in the --ascii RTT pane:\n{screen}"
+        );
+        assert!(screen.contains('*'), "no plotted point:\n{screen}");
+        assert!(screen.contains('+') && screen.contains('|'), "{screen}");
+        // the axis row is drawn with '-' and the y labels keep their unit
+        assert!(screen.contains("---"), "{screen}");
+        assert!(screen.contains(" ms") && screen.contains("now"), "{screen}");
     }
 
     #[test]

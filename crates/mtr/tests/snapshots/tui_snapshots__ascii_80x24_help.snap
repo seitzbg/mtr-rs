@@ -1,6 +1,6 @@
 ---
 source: crates/mtr/tests/tui_snapshots.rs
-expression: "render(&f, 80, 24)"
+expression: help
 ---
 "mtr 0.1.0  ->  target.example (192.0.2.10)   ICMP/IPv4  i=1s  Snt 4     12:34:56"
 "   #. Host                   Loss%   Snt   Last   Avg  Best  Wrst StDev   Recent"
@@ -17,12 +17,12 @@ expression: "render(&f, 80, 24)"
 "    |m <n>   max TTL                    s <n>   packet size (n<0: random)  |    "
 "    |b <c>   bit pattern (-1: random)   Q <t>   TOS                        |    "
 "+ Ho|Up/Dn j/k  select hop              Enter   toggle detail pane         |---+"
-"|1 m|Tab     next detail tab            +/- PgUp/PgDn  scroll              | ••|"
-"|   |Ctrl-L  redraw                                                        | ••|"
-"| 0.|                                                                      |•• |"
+"|1 m|Tab     next detail tab            +/- PgUp/PgDn  scroll              | **|"
+"| 0.|Ctrl-L  redraw                                                        | **|"
+"|   |                                                                      |   |"
 "|   |press any key to go back...                                           |   |"
-"|   +----------------------------------------------------------------------+───|"
-"|  -6s                                                                      now|"
+"|   +----------------------------------------------------------------------+---|"
+"|     -6s                                                                   now|"
 "|                                                                              |"
 "+------------------------------------------------------------------------------+"
 "any key closes help                                                             "
