@@ -166,6 +166,34 @@ async fn cycles_finish_the_loop_and_leave_a_printable_exit_report() {
 }
 
 #[tokio::test]
+async fn ctrl_l_and_resize_force_a_redraw_without_hanging() {
+    // Regression test for the fatal "cursor position could not be read" abort: `ui.redraw`
+    // (set by Ctrl-L and by Event::Resize) used to call Terminal::clear(), which queries the
+    // cursor position over the tty and blocks reading the reply from stdin — but our loop owns
+    // stdin via the EventStream, so the reply never arrives and the query times out fatally.
+    // The fix (crates/mtr/src/tui/run.rs) forces the redraw via Terminal::resize() instead,
+    // which never touches the cursor. TestBackend has no tty and never times out on a cursor
+    // query, so this test cannot reproduce the original hang directly; it documents the code
+    // path by exercising both redraw triggers (Ctrl-L and a resize event) and asserting the
+    // loop still completes normally. TestBackend's own size doesn't track the Resize event's
+    // payload dimensions (our code re-queries `terminal.size()` from the backend rather than
+    // trusting the event), so the backend stays 80x24 here; what's under test is that the
+    // redraw path runs to completion without erroring.
+    let keys = vec![
+        (300, ctrl('l')),
+        (300, Ok(Event::Resize(100, 30))),
+        (300, key('q')),
+    ];
+    let s = session(keys, Config::default()).await;
+    assert!(!s.interrupted);
+    assert!(
+        s.screen.contains("192.0.2.1"),
+        "target row still rendered after forced redraws:\n{}",
+        s.screen
+    );
+}
+
+#[tokio::test]
 async fn stdin_eof_quits() {
     // empty `keys` → the sender task ends at once → the stream yields None → quit
     let s = session(vec![], Config::default()).await;

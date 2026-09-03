@@ -66,7 +66,12 @@ where
             let area = screen(terminal)?;
             ui.clamp(&bounds(area, driver.engine, &ui));
             if ui.redraw {
-                terminal.clear()?;
+                // Force a full repaint via resize(), not clear(): Terminal::clear() first calls
+                // backend.get_cursor_position(), which writes a DSR query to the tty and blocks
+                // reading the reply from stdin. We own stdin via crossterm's EventStream, so that
+                // reply is consumed by our loop instead and the query times out fatally. resize()
+                // clears the viewport and resets the back buffer without touching the cursor.
+                terminal.resize(area)?;
                 ui.redraw = false;
             }
             let clock_s = clock_text(&jiff::Zoned::now());
