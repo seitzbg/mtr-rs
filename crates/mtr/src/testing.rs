@@ -187,8 +187,8 @@ pub fn snapshot_fixture(ascii: bool) -> Fixture {
     });
     let mut names = NameCache::default();
     names.insert_name(ip("10.0.0.1"), "gw.example");
-    let info = crate::asn::parse_txt("64500 | 192.0.2.0/24 | EX | ripe | 2020-01-01");
-    // AsnInfo::name lands in Task 12; until then the AS name column falls back to field(0).
+    let mut info = crate::asn::parse_txt("64500 | 192.0.2.0/24 | EX | ripe | 2020-01-01");
+    info.name = Some("EXAMPLE-AS".to_string());
     names.insert_asn(ip("192.0.2.10"), info);
     Fixture {
         engine,

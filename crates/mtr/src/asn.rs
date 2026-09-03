@@ -8,10 +8,12 @@ pub const IIWIDTH: [usize; 5] = [12, 19, 4, 8, 11];
 /// `UNKN`.
 pub const UNKN: &str = "???";
 
-/// The `|`-separated fields of one origin TXT record.
+/// The `|`-separated fields of one origin TXT record, plus the AS name from the second lookup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsnInfo {
     pub fields: Vec<String>,
+    /// Last field of `AS<n>.asn.cymru.com` (spec §7.2); `None` until that query answers.
+    pub name: Option<String>,
 }
 
 impl AsnInfo {
@@ -19,6 +21,7 @@ impl AsnInfo {
     pub fn unknown() -> Self {
         AsnInfo {
             fields: vec![UNKN.to_string()],
+            name: None,
         }
     }
 
@@ -65,7 +68,29 @@ pub fn parse_txt(txt: &str) -> AsnInfo {
                     .to_string()
             })
             .collect(),
+        name: None,
     }
+}
+
+/// The AS-name record is `ASN | CC | registry | allocated | <name>`: take the last `|` field.
+pub fn parse_as_name(txt: &str) -> Option<String> {
+    let name = txt.rsplit('|').next()?.trim();
+    (txt.contains('|') && !name.is_empty()).then(|| name.to_string())
+}
+
+/// The zone the `AS<n>` records live in; the origin providers are `origin[6].<zone>`.
+pub fn name_zone(provider: &str) -> &str {
+    provider
+        .strip_prefix("origin.")
+        .or_else(|| provider.strip_prefix("origin6."))
+        .unwrap_or(provider)
+}
+
+/// TXT name for the AS-name lookup, or `None` when the origin record holds no single AS number
+/// (`???`, or a multi-origin prefix such as `64500 64501`).
+pub fn as_name_query(info: &AsnInfo, zone: &str) -> Option<String> {
+    let n = info.field(0);
+    (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then(|| format!("AS{n}.{zone}"))
 }
 
 /// `fmt_ipinfo_field()` (asn.c:517-530): `AS%-12s` for field 0, `%-{w}s` otherwise, `???` when unknown.
@@ -152,5 +177,47 @@ mod tests {
         assert_eq!(selected_width(&[0]), 14);
         assert_eq!(selected_width(&[]), 0);
         assert_eq!(format_field(Some(&AsnInfo::unknown()), 0).trim(), "AS???");
+    }
+
+    #[test]
+    fn as_name_records_yield_the_last_field() {
+        // dig +short TXT AS64500.asn.cymru.com → "64500 | US | arin | 2000-01-01 | EXAMPLE-AS, US"
+        assert_eq!(
+            parse_as_name("64500 | US | arin | 2000-01-01 | EXAMPLE-AS, US"),
+            Some("EXAMPLE-AS, US".to_string())
+        );
+        assert_eq!(
+            parse_as_name("64500 | US | arin | 2000-01-01 | "),
+            None,
+            "empty name"
+        );
+        assert_eq!(parse_as_name(""), None);
+        assert_eq!(
+            parse_txt("64500 | 192.0.2.0/24 | US | arin | 2000-01-01").name,
+            None
+        );
+        assert_eq!(AsnInfo::unknown().name, None);
+    }
+
+    #[test]
+    fn as_name_queries_target_the_asn_zone() {
+        assert_eq!(name_zone(P4), "asn.cymru.com");
+        assert_eq!(name_zone(P6), "asn.cymru.com");
+        assert_eq!(name_zone("example.net"), "example.net");
+        let info = parse_txt("64500 | 192.0.2.0/24 | US | arin | 2000-01-01");
+        assert_eq!(
+            as_name_query(&info, name_zone(P4)).as_deref(),
+            Some("AS64500.asn.cymru.com")
+        );
+        assert_eq!(
+            as_name_query(&AsnInfo::unknown(), "asn.cymru.com"),
+            None,
+            "??? has no AS number"
+        );
+        // a multi-origin prefix ("64500 64501 | …") names no single AS: no second query
+        assert_eq!(
+            as_name_query(&parse_txt("64500 64501 | 192.0.2.0/24"), "asn.cymru.com"),
+            None
+        );
     }
 }
