@@ -1,0 +1,18 @@
+[package]
+name = "mtr-packet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Privileged probe helper for mtr-rs, wire-compatible with mtr 0.96's mtr-packet"
+
+[[bin]]
+name = "mtr-packet"
+path = "src/main.rs"
+
+[dependencies]
+mtr-proto.workspace = true
+thiserror.workspace = true
+nix = { workspace = true, features = ["socket", "uio", "poll", "net", "user", "process", "fs"] }
+socket2.workspace = true
+caps.workspace = true

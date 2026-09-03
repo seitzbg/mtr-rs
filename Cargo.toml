@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/mtr-proto", "crates/mtr-core", "crates/mtr"]
+members = ["crates/mtr-proto", "crates/mtr-core", "crates/mtr", "crates/mtr-packet"]
 exclude = ["crates/mtr-proto/fuzz"]
 
 [workspace.package]
@@ -28,3 +28,4 @@ ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3"
 insta = "1"
+caps = "0.5"
