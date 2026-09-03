@@ -1,3 +1,5 @@
+// Golden tests for the ui/report.c layouts (mtr 0.96, commit 7b01773). GPL-2.0-only.
+
 use std::net::IpAddr;
 use std::time::Instant;
 
@@ -6,7 +8,7 @@ use mtr::emit::{ReportContext, csv, json, report};
 use mtr::names::NameCache;
 use mtr_core::fields::active_fields;
 use mtr_core::{Command, Config, Engine, Event};
-use mtr_proto::{ProbeResult, ResponseKind};
+use mtr_proto::{MplsLabel, ProbeResult, ResponseKind};
 
 fn ip(s: &str) -> IpAddr {
     s.parse().unwrap()
@@ -358,6 +360,63 @@ fn csv_adds_asn_column_and_wide_ecmp_rows() {
              MTR.{v},7,OK,target.example,1,10.0.0.1,AS64500,0.00,2\n"
         )
     );
+}
+
+#[test]
+fn csv_has_no_header_when_there_is_nothing_to_report() {
+    let t0 = Instant::now();
+    let e = Engine::new(base_cfg(), ip("192.0.2.10"), None, t0, 1);
+    let names = NameCache::default();
+    let out = csv::render(&ctx(&e, &names, false), 0);
+    assert_eq!(out, "");
+}
+
+#[test]
+fn mpls_labels_are_printed_after_the_hop_row() {
+    let t0 = Instant::now();
+    let mut e = Engine::new(
+        Config {
+            interactive: false,
+            max_ping: 1,
+            max_ttl: 1,
+            mpls: true,
+            ..Config::default()
+        },
+        ip("192.0.2.10"),
+        None,
+        t0,
+        1,
+    );
+    let cmds = e.handle(Event::Tick, t0);
+    let token = cmds
+        .into_iter()
+        .find_map(|c| match c {
+            Command::SendProbe { token, .. } => Some(token),
+            _ => None,
+        })
+        .expect("engine sends a probe on the first tick");
+    e.handle(
+        Event::Probe {
+            token,
+            kind: ResponseKind::Probe {
+                result: ProbeResult::Reply,
+                addr: e.target(),
+                rtt_us: 500,
+                mpls: vec![MplsLabel {
+                    label: 16001,
+                    tc: 0,
+                    bottom_of_stack: true,
+                    ttl: 1,
+                }],
+            },
+        },
+        t0,
+    );
+    e.end_transit();
+    let names = NameCache::default();
+    let out = report::render(&ctx(&e, &names, false));
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[2], "       [MPLS: Lbl 16001 TC 0 S 1 TTL 1]", "{out}");
 }
 
 #[test]

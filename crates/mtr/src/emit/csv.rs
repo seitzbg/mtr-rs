@@ -12,17 +12,22 @@ pub fn render(ctx: &ReportContext<'_>, now_epoch: u64) -> String {
     let e = ctx.engine;
     let cfg = e.config();
     let asn_on = cfg.ipinfo_fields.contains(&0);
-    let mut o = String::from("Mtr_Version,Start_Time,Status,Host,Hop,Ip");
-    if asn_on {
-        o.push_str(",Asn");
-    }
-    for f in &ctx.fields {
-        o.push(',');
-        if f.key != ' ' {
-            o.push_str(f.title);
+    let mut o = String::new();
+    // report.c:572-589 prints the header inside the hop loop, at the first hop: no hops, no
+    // header.
+    if !e.display_range().is_empty() {
+        o.push_str("Mtr_Version,Start_Time,Status,Host,Hop,Ip");
+        if asn_on {
+            o.push_str(",Asn");
         }
+        for f in &ctx.fields {
+            o.push(',');
+            if f.key != ' ' {
+                o.push_str(f.title);
+            }
+        }
+        o.push('\n');
     }
-    o.push('\n');
     for at in e.display_range() {
         let hop = &e.hops()[at];
         let asn = asn_on.then(|| {
