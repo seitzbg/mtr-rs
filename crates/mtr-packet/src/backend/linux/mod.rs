@@ -1,6 +1,7 @@
 //! Linux backend: raw sockets with the unprivileged DGRAM fallback. Ported from
 //! packet/probe_unix.c (mtr 0.96, commit 7b01773). GPL-2.0-only.
 
+pub mod construct;
 pub mod sockets;
 
 use std::os::fd::BorrowedFd;
