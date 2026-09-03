@@ -15,6 +15,7 @@ pub mod construct;
 pub mod deconstruct;
 pub mod errqueue;
 pub mod sockets;
+pub mod stream;
 
 use std::net::{IpAddr, SocketAddr};
 use std::os::fd::{AsRawFd, BorrowedFd};
@@ -25,7 +26,7 @@ use socket2::{SockAddr, Socket};
 
 use super::ProbeBackend;
 use crate::Fatal;
-use crate::probe_table::{Probe, ProbeTable, addr, rtt_us};
+use crate::probe_table::{MAX_PORT, MIN_PORT, Probe, ProbeTable, addr, rtt_us};
 use construct::{
     UDP_HEADER, icmp_echo, packet_size, udp_datagram, udp_ports, udp_source_port_from_pid,
 };
@@ -181,6 +182,84 @@ impl LinuxBackend {
                 Ok(())
             }
             Err(e) => Err(e),
+        }
+    }
+
+    /// The stream half of `send_probe()` (probe_unix.c:588-608): open the connecting socket,
+    /// and when the source port is unusable take the next sequence number and try again. C
+    /// counts the attempts from `MIN_PORT` to `MAX_PORT` exclusive — deliberately one short of
+    /// exhausting the range — and so do we. Every failed attempt drops its socket, so a retry
+    /// leaks no descriptor.
+    fn start_stream(
+        table: &mut ProbeTable,
+        idx: usize,
+        params: &CProbeParams,
+    ) -> std::io::Result<()> {
+        let mut last_err = None;
+        for _ in MIN_PORT..MAX_PORT {
+            let probe = &table.probes[idx];
+            let opened = stream::open(
+                params.protocol,
+                params.ip_version,
+                probe.sequence,
+                probe.local.ip(),
+                probe.remote.ip(),
+                params,
+            );
+            match opened {
+                Ok((sock, dest)) => {
+                    let probe = &mut table.probes[idx];
+                    probe.remote = dest;
+                    probe.local.set_port(probe.sequence);
+                    probe.stream = Some(sock);
+                    return Ok(());
+                }
+                Err(e)
+                    if matches!(
+                        e.raw_os_error(),
+                        Some(nix::libc::EADDRINUSE | nix::libc::EADDRNOTAVAIL)
+                    ) =>
+                {
+                    let next = table.next_sequence();
+                    table.probes[idx].sequence = next;
+                    last_err = Some(e);
+                }
+                Err(e) => {
+                    // The destination the probe was aimed at, so that an ECONNREFUSED —
+                    // which `command.rs` answers with `reply` (probe_unix.c:613-620) —
+                    // still names the right address and port.
+                    table.probes[idx].remote.set_port(stream::dest_port(params));
+                    return Err(e);
+                }
+            }
+        }
+        // Out of attempts: C leaves `errno` at the last EADDRINUSE/EADDRNOTAVAIL, which
+        // report_packet_error() prints as `address-in-use` / `address-not-available`.
+        Err(last_err.unwrap_or_else(|| std::io::Error::from_raw_os_error(nix::libc::EADDRINUSE)))
+    }
+
+    /// `receive_replies_from_probe_socket()` for every outstanding stream probe
+    /// (probe_unix.c:851-904, 947-953). The indices are collected first and walked in reverse,
+    /// because answering a probe `swap_remove`s it and only moves entries that sit *after* the
+    /// one being removed.
+    fn check_streams(&self, table: &mut ProbeTable, now: Instant, out: &mut Vec<Response>) {
+        let stream_idx: Vec<usize> = table.stream_fds().into_iter().map(|(i, _)| i).collect();
+        for idx in stream_idx.into_iter().rev() {
+            let Some(sock) = table.probes[idx].stream.as_ref() else {
+                continue;
+            };
+            match stream::check(sock) {
+                stream::Completion::Pending => {}
+                stream::Completion::Reached => {
+                    let from = table.probes[idx].remote.ip();
+                    self.respond(table, idx, ProbeResult::Reply, from, now, Vec::new(), out);
+                }
+                stream::Completion::Failed(e) => {
+                    // probe_unix.c:900-903: report_packet_error() then free_probe().
+                    let p = table.remove(idx);
+                    out.push(crate::backend::error_response(p.token, &e));
+                }
+            }
         }
     }
 
@@ -429,10 +508,7 @@ impl ProbeBackend for LinuxBackend {
         probe.departure = Instant::now();
         match params.protocol {
             Protocol::Icmp | Protocol::Udp => self.send_datagram(family, probe, params),
-            // Task 13.
-            Protocol::Tcp | Protocol::Sctp => {
-                Err(std::io::Error::from_raw_os_error(nix::libc::EINVAL))
-            }
+            Protocol::Tcp | Protocol::Sctp => Self::start_stream(table, idx, params),
         }
     }
     fn recv_fds(&self) -> Vec<BorrowedFd<'_>> {
@@ -462,6 +538,11 @@ impl ProbeBackend for LinuxBackend {
                 fatal = Some(Fatal::Io("Failure receiving replies".into(), e));
                 break;
             }
+        }
+        // C never reaches its probe-socket loop after a fatal receive error: `error(EXIT_FAILURE)`
+        // ends the process inside `receive_replies()` (probe_unix.c:790, 947-953).
+        if fatal.is_none() {
+            self.check_streams(table, now, out);
         }
         self.fatal = self.fatal.take().or(fatal);
     }
@@ -755,6 +836,113 @@ mod tests {
             );
             assert!(t.is_empty());
         }
+    }
+
+    fn tcp(remote: &str, version: u8, dest_port: i32) -> CProbeParams {
+        CProbeParams {
+            ip_version: version,
+            remote_address: Some(remote.into()),
+            protocol: Protocol::Tcp,
+            dest_port,
+            timeout: 3,
+            ..Default::default()
+        }
+    }
+
+    /// Both halves of the local case: a listening port answers with SYN/ACK and a closed one
+    /// with RST, and C calls each of them `reply` (probe_unix.c:896-903). The third case, a
+    /// ttl-1 probe to a routed address answered by an ICMP time-exceeded, needs the raw receive
+    /// socket to see an ICMP quoting *our* SYN, which an unprivileged process never gets — so
+    /// it is not testable here and is left to `probe.py`'s `TestProbeTCP` under `cap_net_raw`.
+    #[test]
+    fn tcp_to_an_open_and_a_closed_loopback_port_both_reply() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let open_port = i32::from(listener.local_addr().unwrap().port());
+        let Some(mut b) = backend(4) else { return };
+        for (tok, port) in [(80, open_port), (81, 1)] {
+            let mut t = ProbeTable::new();
+            let i = t.alloc(tok, Instant::now(), 3).unwrap();
+            match b.send_probe(&mut t, i, &tcp("127.0.0.1", 4, port)) {
+                Ok(()) => {
+                    assert!(t.probes[i].stream.is_some(), "the probe owns its socket");
+                    assert_eq!(t.stream_fds().len(), 1, "and it is polled for POLLOUT");
+                    let out = pump(&mut b, &mut t, Duration::from_secs(3), |o| !o.is_empty());
+                    assert!(
+                        matches!(
+                            out[0].kind,
+                            ResponseKind::Probe {
+                                result: ProbeResult::Reply,
+                                ..
+                            }
+                        ),
+                        "token {tok}: {out:?}"
+                    );
+                    assert_eq!(out.len(), 1, "token {tok}: {out:?}");
+                    assert!(t.is_empty(), "the socket is closed with the probe");
+                    assert!(t.stream_fds().is_empty());
+                }
+                Err(e) => {
+                    // Loopback may refuse synchronously; the dispatcher turns this into a reply
+                    // (probe_unix.c:610-620, command.rs).
+                    assert_eq!(
+                        e.raw_os_error(),
+                        Some(nix::libc::ECONNREFUSED),
+                        "token {tok}"
+                    );
+                    assert_eq!(
+                        t.probes[i].remote.ip(),
+                        "127.0.0.1".parse::<IpAddr>().unwrap(),
+                        "remote must be set before the error"
+                    );
+                }
+            }
+        }
+        drop(listener);
+    }
+
+    /// probe_unix.c:588-608: a source port that cannot be bound is not fatal — the probe takes
+    /// the next sequence number and tries again. The blocker is a plain `TcpListener`, which
+    /// sets `SO_REUSEADDR` but not `SO_REUSEPORT`, so our probe socket cannot share its port.
+    #[test]
+    fn tcp_retries_the_next_sequence_when_the_source_port_is_taken() {
+        let Some(mut b) = backend(4) else { return };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut t = ProbeTable::new();
+        let i = t.alloc(90, Instant::now(), 3).unwrap();
+        let seq = t.probes[i].sequence;
+        // Occupy local:seq so the first attempt's bind() fails with EADDRINUSE. If some other
+        // process already holds it, so much the better — the retry is what is under test.
+        let blocker = std::net::TcpListener::bind(("127.0.0.1", seq)).ok();
+        let dest = i32::from(listener.local_addr().unwrap().port());
+        b.send_probe(&mut t, i, &tcp("127.0.0.1", 4, dest)).unwrap();
+        assert_ne!(
+            t.probes[i].sequence, seq,
+            "the sequence advanced past the busy port"
+        );
+        let bound = t.probes[i]
+            .stream
+            .as_ref()
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .as_socket()
+            .unwrap()
+            .port();
+        assert_eq!(bound, t.probes[i].sequence, "bound to the new sequence");
+        assert_eq!(t.probes[i].local.port(), t.probes[i].sequence);
+        assert_eq!(t.probes[i].remote.port() as i32, dest);
+        let out = pump(&mut b, &mut t, Duration::from_secs(3), |o| !o.is_empty());
+        assert!(
+            matches!(
+                out[0].kind,
+                ResponseKind::Probe {
+                    result: ProbeResult::Reply,
+                    ..
+                }
+            ),
+            "{out:?}"
+        );
+        drop(blocker);
     }
 
     #[test]
