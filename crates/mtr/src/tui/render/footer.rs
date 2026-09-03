@@ -6,12 +6,38 @@ use ratatui::text::{Line, Span};
 
 use crate::tui::render::View;
 use crate::tui::state::{Prompt, PromptKind, UiState};
+use crate::width::{display_width, truncate_to};
 
+/// Hints most-useful-first: the full line is ~100 cells, so at 80 columns the tail is dropped and
+/// whatever survives has to be enough to reach everything else — `q quit` and `? help` lead.
 pub fn hints(ui: &UiState) -> String {
     if ui.help {
         return "any key closes help".to_string();
     }
-    "q quit  p pause  SPACE resume  r reset  n dns  z asn  e mpls  d recent  ↑↓ select  Tab tab  Enter pane  ? help".to_string()
+    "q quit  ? help  p pause  Space resume  r reset  Enter pane  Tab tab  ↑↓ select  d recent  n dns  z asn  e mpls".to_string()
+}
+
+/// Drop whole hints (never half a word) until the line fits `width` display cells.
+pub fn fit_hints(hints: &str, width: usize) -> String {
+    if display_width(hints) <= width {
+        return hints.to_string();
+    }
+    let mut out = String::new();
+    for hint in hints.split("  ") {
+        let sep = if out.is_empty() { 0 } else { 2 };
+        if display_width(&out) + sep + display_width(hint) > width {
+            break;
+        }
+        if sep != 0 {
+            out.push_str("  ");
+        }
+        out.push_str(hint);
+    }
+    if out.is_empty() {
+        // narrower than the first hint: cut it rather than print nothing
+        return truncate_to(hints, width).to_string();
+    }
+    out
 }
 
 /// Current value of the prompted setting, as C prints it in the prompt line.
@@ -52,7 +78,10 @@ pub fn render(view: &View, area: Rect, buf: &mut Buffer) {
         if view.glyphs.arrow == "->" {
             h = h.replace("↑↓", "Up/Dn");
         }
-        Line::from(Span::styled(h, pal.dim()))
+        Line::from(Span::styled(
+            fit_hints(&h, usize::from(area.width)),
+            pal.dim(),
+        ))
     };
     buf.set_line(area.x, area.y, &line, area.width);
 }
@@ -72,7 +101,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render(&f.view(), area, &mut buf);
         assert!(
-            row_text(&buf, 0).starts_with("q quit  p pause"),
+            row_text(&buf, 0).starts_with("q quit  ? help  p pause"),
             "{:?}",
             row_text(&buf, 0)
         );
@@ -99,5 +128,22 @@ mod tests {
             }),
             "any key closes help"
         );
+    }
+
+    #[test]
+    fn hints_are_cut_at_a_hint_boundary_and_keep_quit_and_help() {
+        let full = hints(&UiState::new());
+        assert!(display_width(&full) > 80, "{full:?}");
+        let cut = fit_hints(&full, 80);
+        assert!(display_width(&cut) <= 80, "{cut:?}");
+        assert!(cut.starts_with("q quit  ? help"), "{cut:?}");
+        assert!(!cut.ends_with(' ') && !cut.contains("  s"), "{cut:?}");
+        // every surviving hint is whole
+        for h in cut.split("  ") {
+            assert!(full.split("  ").any(|f| f == h), "partial hint {h:?}");
+        }
+        assert_eq!(fit_hints(&full, 6), "q quit");
+        assert_eq!(fit_hints("q quit", 3), "q q");
+        assert_eq!(fit_hints("abc", 10), "abc");
     }
 }
