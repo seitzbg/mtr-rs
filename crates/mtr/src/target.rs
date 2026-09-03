@@ -14,21 +14,22 @@ fn family_ok(ip: IpAddr, af: AddressFamily) -> bool {
     }
 }
 
-/// `unmap_v4mapped_addrinfo()`: `::ffff:a.b.c.d` becomes `a.b.c.d`.
-fn unmap(ip: IpAddr) -> IpAddr {
+/// `unmap_v4mapped_addrinfo()` (ui/mtr.c:1007): `::ffff:a.b.c.d` becomes `a.b.c.d`, but only
+/// when no address family was requested — with `-4`/`-6` the address is used as resolved.
+fn unmap(ip: IpAddr, af: AddressFamily) -> IpAddr {
     match ip {
-        IpAddr::V6(v6) => v6
+        IpAddr::V6(v6) if af == AddressFamily::Unspec => v6
             .to_ipv4_mapped()
             .map(IpAddr::V4)
             .unwrap_or(IpAddr::V6(v6)),
-        v4 => v4,
+        other => other,
     }
 }
 
 /// First `getaddrinfo()` result in the requested family.
 pub async fn resolve_target(name: &str, af: AddressFamily) -> Result<IpAddr, String> {
     if let Ok(ip) = name.parse::<IpAddr>() {
-        let ip = unmap(ip);
+        let ip = unmap(ip, af);
         return if family_ok(ip, af) {
             Ok(ip)
         } else {
@@ -39,7 +40,7 @@ pub async fn resolve_target(name: &str, af: AddressFamily) -> Result<IpAddr, Str
         .await
         .map_err(|e| format!("Failed to resolve host: {name}: {e}"))?;
     addrs
-        .map(|s| unmap(s.ip()))
+        .map(|s| unmap(s.ip(), af))
         .find(|ip| family_ok(*ip, af))
         .ok_or_else(|| format!("Failed to resolve host: {name}"))
 }
@@ -64,7 +65,10 @@ pub fn find_local_address(target: IpAddr, mark: u32) -> Result<Option<IpAddr>, S
     let _ = mark;
     match sock.connect(&SockAddr::from(SocketAddr::new(target, 1))) {
         Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::HostUnreachable => return Ok(None),
+        // net.c:764-773: only Linux tolerates an unreachable target here.
+        Err(e) if cfg!(target_os = "linux") && e.kind() == std::io::ErrorKind::HostUnreachable => {
+            return Ok(None);
+        }
         Err(e) => return Err(format!("udp socket connect failed: {e}")),
     }
     let local = sock
@@ -90,8 +94,11 @@ pub fn interface_address(name: &str, want_v6: bool) -> Result<IpAddr, String> {
         if ifa.interface_name != name {
             continue;
         }
+        let Some(ss) = ifa.address else {
+            // net.c:692: the name match only counts when the entry carries an address.
+            continue;
+        };
         found_interface = true;
-        let Some(ss) = ifa.address else { continue };
         match (want_v6, ss.as_sockaddr_in(), ss.as_sockaddr_in6()) {
             (false, Some(sin), _) => return Ok(IpAddr::V4(sin.ip())),
             (true, _, Some(sin6)) => return Ok(IpAddr::V6(sin6.ip())),
@@ -140,6 +147,19 @@ mod tests {
                 .await
                 .unwrap(),
             "192.0.2.1".parse::<IpAddr>().unwrap()
+        );
+        // ui/mtr.c:1007: an explicit family keeps the v4-mapped address as an IPv6 target
+        assert_eq!(
+            resolve_target("::ffff:192.0.2.1", AddressFamily::V6)
+                .await
+                .unwrap(),
+            "::ffff:192.0.2.1".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            resolve_target("::ffff:192.0.2.1", AddressFamily::V4)
+                .await
+                .unwrap_err(),
+            "Failed to resolve host: ::ffff:192.0.2.1"
         );
     }
 
