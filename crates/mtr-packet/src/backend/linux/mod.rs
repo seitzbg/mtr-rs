@@ -508,6 +508,14 @@ impl ProbeBackend for LinuxBackend {
         probe.departure = Instant::now();
         match params.protocol {
             Protocol::Icmp | Protocol::Udp => self.send_datagram(family, probe, params),
+            Protocol::Sctp if !self.sctp => {
+                // No SCTP in this kernel: EINVAL → `invalid-argument`, matching C's refusal in
+                // `is_protocol_supported()` (probe_unix.c:506-528) rather than leaking the
+                // `EPROTONOSUPPORT` that `socket(2)` would otherwise report. The dispatcher
+                // already rejects this earlier via `Helper::send_probe`'s `protocol_supported`
+                // check; this is the belt-and-braces path for a backend used directly.
+                Err(std::io::Error::from_raw_os_error(nix::libc::EINVAL))
+            }
             Protocol::Tcp | Protocol::Sctp => Self::start_stream(table, idx, params),
         }
     }
@@ -960,5 +968,100 @@ mod tests {
         b.send_probe(&mut t, i2, &udp("127.0.0.1", 4, 0, 0))
             .unwrap();
         assert_eq!(t.probes[i2].remote.port(), t.probes[i2].sequence);
+    }
+
+    fn sctp(remote: &str, version: u8, dest_port: i32) -> CProbeParams {
+        CProbeParams {
+            ip_version: version,
+            remote_address: Some(remote.into()),
+            protocol: Protocol::Sctp,
+            dest_port,
+            timeout: 3,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_sctp_probe_without_kernel_sctp_is_an_invalid_argument_not_an_unexpected_error() {
+        let Some(mut b) = backend(4) else { return };
+        b.sctp = false; // pretend the module is absent, as on a stripped kernel
+        let mut t = ProbeTable::new();
+        let i = t.alloc(94, Instant::now(), 3).unwrap();
+        let p = CProbeParams {
+            ip_version: 4,
+            remote_address: Some("127.0.0.1".into()),
+            protocol: Protocol::Sctp,
+            dest_port: 164,
+            timeout: 3,
+            ..Default::default()
+        };
+        let e = b.send_probe(&mut t, i, &p).unwrap_err();
+        // `is_protocol_supported()` (probe_unix.c:506-528) rejects it; EINVAL is what
+        // `error_response` turns into `invalid-argument`, never `unexpected-error errno 93`.
+        assert_eq!(e.raw_os_error(), Some(nix::libc::EINVAL));
+        t.remove(i);
+    }
+
+    #[test]
+    fn sctp_to_a_closed_loopback_port_replies_when_supported() {
+        let Some(mut b) = backend(4) else { return };
+        if !b.protocol_supported(Protocol::Sctp) {
+            eprintln!("skipping: no SCTP support");
+            return;
+        }
+        let mut t = ProbeTable::new();
+        let i = t.alloc(95, Instant::now(), 3).unwrap();
+        let p = CProbeParams {
+            ip_version: 4,
+            remote_address: Some("127.0.0.1".into()),
+            protocol: Protocol::Sctp,
+            dest_port: 164,
+            timeout: 3,
+            ..Default::default()
+        };
+        match b.send_probe(&mut t, i, &p) {
+            Ok(()) => {
+                let out = pump(&mut b, &mut t, Duration::from_secs(3), |o| !o.is_empty());
+                assert!(
+                    matches!(
+                        out[0].kind,
+                        ResponseKind::Probe {
+                            result: ProbeResult::Reply,
+                            ..
+                        }
+                    ),
+                    "{out:?}"
+                );
+            }
+            Err(e) => assert_eq!(e.raw_os_error(), Some(nix::libc::ECONNREFUSED)),
+        }
+    }
+
+    #[test]
+    fn sctp_to_a_closed_loopback_v6_port_replies_when_supported() {
+        let Some(mut b) = backend(6) else { return };
+        if !b.protocol_supported(Protocol::Sctp) {
+            eprintln!("skipping: no SCTP support");
+            return;
+        }
+        let mut t = ProbeTable::new();
+        let i = t.alloc(96, Instant::now(), 3).unwrap();
+        let p = sctp("::1", 6, 164);
+        match b.send_probe(&mut t, i, &p) {
+            Ok(()) => {
+                let out = pump(&mut b, &mut t, Duration::from_secs(3), |o| !o.is_empty());
+                assert!(
+                    matches!(
+                        out[0].kind,
+                        ResponseKind::Probe {
+                            result: ProbeResult::Reply,
+                            ..
+                        }
+                    ),
+                    "{out:?}"
+                );
+            }
+            Err(e) => assert_eq!(e.raw_os_error(), Some(nix::libc::ECONNREFUSED)),
+        }
     }
 }

@@ -100,6 +100,13 @@ pub fn open(
 /// a `poll()` with `PollTimeout::ZERO` here. `EAGAIN` from the poll is "nothing yet"
 /// (probe_unix.c:876-878); so is `EINTR`, which C would treat as fatal but which only means the
 /// answer has not been read yet.
+///
+/// C's `select()` marks a connecting socket writable both when the connect succeeds and when it
+/// fails (Linux's `sock_def_write_space()` wakes writers on either outcome, which is what
+/// `write_set` observes). `poll(2)` is not required to make the same promise: on this kernel a
+/// refused *SCTP* connect (unlike TCP's) reports only `POLLERR`, never `POLLOUT`, on the failed
+/// socket. Treating `POLLERR` as completion too keeps `poll()` matching `select()`'s semantics
+/// for both protocols, rather than spinning forever on the SCTP case.
 pub fn check(sock: &Socket) -> Completion {
     let mut fds = [PollFd::new(sock.as_fd(), PollFlags::POLLOUT)];
     match nix::poll::poll(&mut fds, PollTimeout::ZERO) {
@@ -109,7 +116,7 @@ pub fn check(sock: &Socket) -> Completion {
     }
     if !fds[0]
         .revents()
-        .is_some_and(|r| r.intersects(PollFlags::POLLOUT))
+        .is_some_and(|r| r.intersects(PollFlags::POLLOUT | PollFlags::POLLERR))
     {
         return Completion::Pending;
     }
