@@ -222,7 +222,8 @@ async fn run_target(
             )
             .await;
             drop(guard); // restore before any message is printed
-            let r = r.map_err(|e| Fatal::Abort(e.to_string()))?;
+            // `{:#}` keeps anyhow's context chain ("terminal input: <cause>").
+            let r = r.map_err(|e| Fatal::Abort(format!("{e:#}")))?;
             driver::RunOutcome {
                 interrupted: r.interrupted,
             }
