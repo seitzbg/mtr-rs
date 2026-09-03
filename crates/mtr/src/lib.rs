@@ -103,31 +103,30 @@ pub async fn run(argv: Vec<String>) -> i32 {
         return 1;
     }
 
-    // validate_report_targets() (ui/mtr.c:1089-1131): all targets must share one address family.
+    // validate_report_targets() (ui/mtr.c:1089-1131): the first target's family becomes the
+    // getaddrinfo() hint for every later target, so a dual-stack host follows the first one and
+    // only a host with no address in that family fails (C: EAI_ADDRFAMILY).
     let mut af = opts.af;
     if opts.targets.len() > 1 {
-        let mut family_v6: Option<bool> = None;
+        let requested = opts.af;
         for t in &opts.targets {
             match target::resolve_target(&t.name, af).await {
                 Ok(ip) => {
-                    if family_v6.is_some_and(|v6| v6 != ip.is_ipv6()) {
-                        eprintln!("mtr: multiple report targets must use the same address family");
-                        return 1;
+                    af = if ip.is_ipv6() {
+                        AddressFamily::V6
+                    } else {
+                        AddressFamily::V4
                     }
-                    family_v6 = Some(ip.is_ipv6());
                 }
                 Err(msg) => {
-                    eprintln!("mtr: {msg}");
+                    if af != requested && target::resolve_target(&t.name, requested).await.is_ok() {
+                        eprintln!("mtr: multiple report targets must use the same address family");
+                    } else {
+                        eprintln!("mtr: {msg}");
+                    }
                     return 1;
                 }
             }
-        }
-        if let Some(v6) = family_v6 {
-            af = if v6 {
-                AddressFamily::V6
-            } else {
-                AddressFamily::V4
-            };
         }
     }
 
