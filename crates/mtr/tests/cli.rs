@@ -1,4 +1,5 @@
-use std::process::Command;
+use std::io::Write as _;
+use std::process::{Command, Stdio};
 
 fn mtr() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_mtr"));
@@ -82,4 +83,42 @@ fn unresolvable_target_fails_with_c_message() {
         err.contains("Failed to resolve host: no-such-host.invalid"),
         "{err}"
     );
+}
+
+#[test]
+fn dash_f_dash_reads_hosts_from_stdin() {
+    let mut child = mtr()
+        .args(["-F", "-", "-r"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"no-such-host.invalid\n")
+        .unwrap();
+    let o = child.wait_with_output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        err.contains("Failed to resolve host: no-such-host.invalid"),
+        "{err}"
+    );
+}
+
+#[test]
+fn dash_f_names_precede_positional_names() {
+    let path = std::env::temp_dir().join(format!("mtr-rs-cli-hosts-{}", std::process::id()));
+    std::fs::write(&path, "a.invalid\n").unwrap();
+    let (code, _, err) = run(&["-F", path.to_str().unwrap(), "-r", "b.invalid"]);
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(code, Some(1), "{err}");
+    let first = err
+        .lines()
+        .find(|l| l.contains("Failed to resolve host:"))
+        .unwrap_or_else(|| panic!("no resolution failure in stderr: {err}"));
+    assert!(first.contains("a.invalid"), "{err}");
 }

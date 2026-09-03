@@ -79,7 +79,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
         return 0;
     }
     if let Some(file) = args.filename.take() {
-        match options::read_hosts_file(&file) {
+        match options::hosts_from_file_option(&file, helper::sudo_guard_present()) {
             Ok(mut names) => {
                 names.append(&mut args.hosts);
                 args.hosts = names;

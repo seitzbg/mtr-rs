@@ -74,6 +74,15 @@ pub fn read_hosts_file(path: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// `-F` file reading guarded by the sudo marker file (ui/mtr.c:717-721): refused with the C
+/// message when running under sudo, otherwise delegates to [`read_hosts_file`].
+pub fn hosts_from_file_option(path: &str, guard_present: bool) -> Result<Vec<String>, String> {
+    if guard_present {
+        return Err("-F option is disabled under sudo.".to_string());
+    }
+    read_hosts_file(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +101,25 @@ mod tests {
             split_mtr_options("-o 'unterminated").unwrap_err(),
             "unterminated quote in MTR_OPTIONS"
         );
+    }
+
+    #[test]
+    fn hosts_from_file_option_refused_under_sudo_guard() {
+        assert_eq!(
+            hosts_from_file_option("/whatever", true).unwrap_err(),
+            "-F option is disabled under sudo."
+        );
+    }
+
+    #[test]
+    fn hosts_from_file_option_reads_file_when_guard_absent() {
+        let path = std::env::temp_dir().join(format!("mtr-rs-hosts-opt-{}", std::process::id()));
+        std::fs::write(&path, "a.example\nb.example\n").unwrap();
+        assert_eq!(
+            hosts_from_file_option(path.to_str().unwrap(), false).unwrap(),
+            ["a.example", "b.example"]
+        );
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

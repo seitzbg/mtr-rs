@@ -34,26 +34,54 @@ pub enum HelperEvent {
 }
 
 /// A running helper. Dropping it kills the child (`kill_on_drop`).
+///
+/// The request channel (`tx`) holds 256 entries and the event channel (`rx`) holds 1024. The
+/// engine issues at most one probe per tick, and the driver drains `rx` on every `select!`
+/// iteration, so under the current driver neither side can fill up. Any future driver
+/// implementation must keep draining `rx` while it awaits `tx.send`, or the helper's stdout
+/// back-pressure (it blocks writing replies once `ev_tx` is full) can stall the whole pipeline.
 pub struct Helper {
     pub tx: mpsc::Sender<Request>,
     pub rx: mpsc::Receiver<HelperEvent>,
     _child: Child,
 }
 
+/// Path to the marker file that indicates mtr is running under `sudo` (`ui/mtr.c:717-721` and
+/// `execute_packet_child()`). When present, `$MTR_PACKET` is ignored and `-F` is refused.
+pub const SUDO_GUARD_FILE: &str = "/etc/mtr.is.run.under.sudo";
+
+/// Whether the sudo marker file exists.
+pub fn sudo_guard_present() -> bool {
+    Path::new(SUDO_GUARD_FILE).exists()
+}
+
 /// `execute_packet_child()`: `$MTR_PACKET` (ignored when `/etc/mtr.is.run.under.sudo` exists),
 /// `mtr-packet` on `PATH`, next to our own executable, `./mtr-packet`.
 pub fn candidates() -> Vec<PathBuf> {
+    candidates_from(
+        std::env::var_os("MTR_PACKET"),
+        sudo_guard_present(),
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(Path::to_path_buf)),
+    )
+}
+
+/// Pure core of [`candidates`]: the C search order given an explicit `$MTR_PACKET` value, sudo
+/// guard state and executable directory, without touching the environment or filesystem.
+pub fn candidates_from(
+    mtr_packet_env: Option<std::ffi::OsString>,
+    guard_present: bool,
+    exe_dir: Option<PathBuf>,
+) -> Vec<PathBuf> {
     let mut v = Vec::new();
-    if !Path::new("/etc/mtr.is.run.under.sudo").exists() {
-        if let Some(p) = std::env::var_os("MTR_PACKET") {
+    if !guard_present {
+        if let Some(p) = mtr_packet_env {
             v.push(PathBuf::from(p));
         }
     }
     v.push(PathBuf::from("mtr-packet"));
-    if let Some(dir) = std::env::current_exe()
-        .ok()
-        .and_then(|e| e.parent().map(Path::to_path_buf))
-    {
+    if let Some(dir) = exe_dir {
         v.push(dir.join("mtr-packet"));
     }
     v.push(PathBuf::from("./mtr-packet"));
@@ -265,6 +293,58 @@ mod tests {
         let c = candidates();
         assert_eq!(c.last().unwrap(), &PathBuf::from("./mtr-packet"));
         assert!(c.iter().any(|p| p == &PathBuf::from("mtr-packet")));
+    }
+
+    #[test]
+    fn candidates_from_env_first_when_guard_absent() {
+        let c = candidates_from(
+            Some(std::ffi::OsString::from("/opt/mtr-packet")),
+            false,
+            None,
+        );
+        assert_eq!(
+            c,
+            vec![
+                PathBuf::from("/opt/mtr-packet"),
+                PathBuf::from("mtr-packet"),
+                PathBuf::from("./mtr-packet"),
+            ]
+        );
+    }
+
+    #[test]
+    fn candidates_from_guard_present_drops_env_and_leads_with_mtr_packet() {
+        let c = candidates_from(
+            Some(std::ffi::OsString::from("/opt/mtr-packet")),
+            true,
+            None,
+        );
+        assert!(!c.contains(&PathBuf::from("/opt/mtr-packet")));
+        assert_eq!(c.first().unwrap(), &PathBuf::from("mtr-packet"));
+    }
+
+    #[test]
+    fn candidates_from_env_unset_leads_with_mtr_packet() {
+        let c = candidates_from(None, false, None);
+        assert_eq!(c.first().unwrap(), &PathBuf::from("mtr-packet"));
+    }
+
+    #[test]
+    fn candidates_from_dot_mtr_packet_is_last() {
+        let c = candidates_from(
+            Some(std::ffi::OsString::from("/opt/mtr-packet")),
+            false,
+            Some(PathBuf::from("/usr/local/bin")),
+        );
+        assert_eq!(
+            c,
+            vec![
+                PathBuf::from("/opt/mtr-packet"),
+                PathBuf::from("mtr-packet"),
+                PathBuf::from("/usr/local/bin/mtr-packet"),
+                PathBuf::from("./mtr-packet"),
+            ]
+        );
     }
 
     #[test]
