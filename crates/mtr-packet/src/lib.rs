@@ -4,6 +4,7 @@
 
 pub mod backend;
 pub mod command;
+pub mod privs;
 pub mod probe_table;
 
 use std::io::Write;
