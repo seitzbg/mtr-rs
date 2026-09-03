@@ -101,10 +101,6 @@ pub async fn run(argv: Vec<String>) -> i32 {
             return 1;
         }
     };
-    if opts.mode == OutputMode::Tui {
-        eprintln!("mtr: interactive mode is not implemented yet; use -r, -w, -j or -C");
-        return 1;
-    }
 
     // validate_report_targets() (ui/mtr.c:1089-1131): the first target's family becomes the
     // getaddrinfo() hint for every later target, so a dual-stack host follows the first one and
@@ -135,7 +131,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
 
     let mut exit_val = 0;
     for t in &opts.targets {
-        match run_target(&opts, t, af).await {
+        match run_target(&opts, t, af, is_root).await {
             Ok(TargetOutcome::Done) => {}
             Ok(TargetOutcome::Interrupted) => {
                 exit_val = 130;
@@ -158,7 +154,12 @@ pub async fn run(argv: Vec<String>) -> i32 {
     exit_val
 }
 
-async fn run_target(opts: &Options, t: &Target, af: AddressFamily) -> Result<TargetOutcome, Fatal> {
+async fn run_target(
+    opts: &Options,
+    t: &Target,
+    af: AddressFamily,
+    is_root: bool,
+) -> Result<TargetOutcome, Fatal> {
     let ip = target::resolve_target(&t.name, af)
         .await
         .map_err(Fatal::Skip)?;
@@ -199,12 +200,42 @@ async fn run_target(opts: &Options, t: &Target, af: AddressFamily) -> Result<Tar
     let mut engine = Engine::new(cfg, ip, local, Instant::now(), seed);
     let interrupted = {
         let mut driver = Driver::new(&mut engine, &mut helper, resolver.as_mut(), &mut names);
-        let outcome = driver
-            .run()
-            .await
-            .map_err(|e| Fatal::Abort(e.to_string()))?;
-        if outcome.interrupted {
-            driver.engine.end_transit(); // net_end_transit() before display_close()
+        let outcome = if opts.mode == OutputMode::Tui {
+            tui::terminal::install_panic_hook();
+            let guard =
+                tui::terminal::enter().map_err(|e| Fatal::Abort(format!("terminal: {e}")))?;
+            let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
+            let mut term = ratatui::Terminal::new(backend)
+                .map_err(|e| Fatal::Abort(format!("terminal: {e}")))?;
+            let tui_opts = tui::TuiOptions {
+                glyphs: tui::Glyphs::select(opts.ascii),
+                palette: tui::Palette::detect(opts.color),
+                is_root,
+                local_hostname: &local_hostname,
+                target_name: &t.name,
+            };
+            let r = tui::run(
+                &mut term,
+                &mut driver,
+                crossterm::event::EventStream::new(),
+                &tui_opts,
+            )
+            .await;
+            drop(guard); // restore before any message is printed
+            let r = r.map_err(|e| Fatal::Abort(e.to_string()))?;
+            driver::RunOutcome {
+                interrupted: r.interrupted,
+            }
+        } else {
+            driver
+                .run()
+                .await
+                .map_err(|e| Fatal::Abort(e.to_string()))?
+        };
+        if outcome.interrupted || opts.mode == OutputMode::Tui {
+            // display.c:145-152 calls net_end_transit() on every close path, not just Ctrl-C, so
+            // `q --report-on-exit` reports in-flight probes as drops too (spec §8.3).
+            driver.engine.end_transit();
         }
         driver.drain_lookups(Duration::from_secs(2)).await;
         outcome.interrupted
@@ -227,7 +258,8 @@ async fn run_target(opts: &Options, t: &Target, af: AddressFamily) -> Result<Tar
                 .unwrap_or(0);
             print!("{}", emit::csv::render(&ctx, now));
         }
-        OutputMode::Tui => unreachable!("rejected before probing"),
+        // Task 15 prints the `--report-on-exit` report here.
+        OutputMode::Tui => {}
     }
     Ok(if interrupted {
         TargetOutcome::Interrupted

@@ -5,12 +5,14 @@ pub mod glyphs;
 pub mod input;
 pub mod palette;
 pub mod render;
+pub mod run;
 pub mod state;
 pub mod terminal;
 
 pub use glyphs::Glyphs;
 pub use input::{Input, map_key, parse_prompt, toggle_status};
 pub use palette::{Depth, Palette};
+pub use run::{TuiOptions, TuiOutcome, run};
 pub use state::{Bounds, DetailTab, PromptKind, Quit, UiAction, UiState};
 
 /// The single protocol-name mapping; used by the header (Task 10) and by

@@ -66,16 +66,6 @@ fn mtr_options_is_read_but_the_command_line_wins() {
 }
 
 #[test]
-fn interactive_mode_is_not_available_yet() {
-    let (code, _, err) = run(&["127.0.0.1"]);
-    assert_eq!(code, Some(1));
-    assert!(
-        err.contains("interactive mode is not implemented yet"),
-        "{err}"
-    );
-}
-
-#[test]
 fn unresolvable_target_fails_with_c_message() {
     let (code, _, err) = run(&["-r", "no-such-host.invalid"]);
     assert_eq!(code, Some(1));
