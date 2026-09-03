@@ -4,7 +4,9 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
-use clap::{ArgAction, Parser};
+use clap::{
+    ArgAction, ArgMatches, CommandFactory as _, FromArgMatches as _, Parser, parser::ValueSource,
+};
 use mtr_core::{Config, MAX_PACKET, MIN_PACKET, fields};
 use mtr_proto::Protocol;
 
@@ -293,6 +295,26 @@ pub struct Args {
     /// Target hosts (HOSTNAME[:PORT] with -u/-T/-S)
     #[arg(value_name = "HOSTNAME")]
     pub hosts: Vec<String>,
+    /// Output mode by last-flag-wins order (mtr.c:624-660); set by [`Args::parse_argv`].
+    #[arg(skip)]
+    pub mode: Option<OutputMode>,
+}
+
+/// The mode flags in `argv` order; the one that appears last wins, as each `case` in
+/// ui/mtr.c:624-660 overwrites `ctl->DisplayMode`. Returns `None` when no mode flag was given.
+pub fn output_mode(m: &ArgMatches) -> Option<OutputMode> {
+    [
+        ("report", OutputMode::Report),
+        ("report_wide", OutputMode::Report),
+        ("curses", OutputMode::Tui),
+        ("csv", OutputMode::Csv),
+        ("json", OutputMode::Json),
+    ]
+    .into_iter()
+    .filter(|(id, _)| m.value_source(id) == Some(ValueSource::CommandLine))
+    .filter_map(|(id, mode)| m.index_of(id).map(|i| (i, mode)))
+    .max_by_key(|(i, _)| *i)
+    .map(|(_, mode)| mode)
 }
 
 #[derive(Debug, Clone)]
@@ -311,9 +333,17 @@ pub struct Options {
 }
 
 impl Args {
+    /// Parse `argv` (including `argv[0]`) and record the last-wins output mode.
+    pub fn parse_argv(argv: Vec<String>) -> Result<Args, clap::Error> {
+        let matches = Args::command().try_get_matches_from(argv)?;
+        let mut args = Args::from_arg_matches(&matches)?;
+        args.mode = output_mode(&matches);
+        Ok(args)
+    }
+
     /// Validation in the order of ui/mtr.c, producing its error texts (exit code 1 in `main`).
     pub fn into_options(self, is_root: bool) -> Result<Options, String> {
-        let mode = if self.json {
+        let mode = self.mode.unwrap_or(if self.json {
             OutputMode::Json
         } else if self.csv {
             OutputMode::Csv
@@ -321,7 +351,7 @@ impl Args {
             OutputMode::Report
         } else {
             OutputMode::Tui
-        };
+        });
         let protocol = match (self.udp, self.tcp, self.sctp) {
             (false, false, false) => Protocol::Icmp,
             (true, false, false) => Protocol::Udp,
@@ -577,14 +607,30 @@ mod tests {
         assert!(o.config.interactive);
     }
 
+    fn opts_argv(args: &[&str]) -> Options {
+        let argv: Vec<String> = std::iter::once("mtr")
+            .chain(args.iter().copied())
+            .map(String::from)
+            .collect();
+        Args::parse_argv(argv).unwrap().into_options(false).unwrap()
+    }
+
     #[test]
     fn output_modes_and_precedence() {
-        assert_eq!(opts(&["h"]).unwrap().mode, OutputMode::Tui);
-        assert_eq!(opts(&["-t", "h"]).unwrap().mode, OutputMode::Tui);
-        assert_eq!(opts(&["-w", "h"]).unwrap().mode, OutputMode::Report);
-        let o = opts(&["-w", "-C", "h"]).unwrap();
-        assert_eq!((o.mode, o.report_wide), (OutputMode::Csv, true));
-        assert_eq!(opts(&["-r", "-j", "h"]).unwrap().mode, OutputMode::Json);
+        assert_eq!(opts_argv(&["h"]).mode, OutputMode::Tui);
+        assert_eq!(opts_argv(&["-t", "h"]).mode, OutputMode::Tui);
+        assert_eq!(opts_argv(&["-w", "h"]).mode, OutputMode::Report);
+        // mtr.c:624-660: the last mode flag on the command line wins (deviation 11)
+        assert_eq!(opts_argv(&["-r", "-t", "h"]).mode, OutputMode::Tui);
+        assert_eq!(opts_argv(&["-t", "-r", "h"]).mode, OutputMode::Report);
+        assert_eq!(opts_argv(&["-j", "-C", "h"]).mode, OutputMode::Csv);
+        assert_eq!(opts_argv(&["-C", "-j", "h"]).mode, OutputMode::Json);
+        assert_eq!(opts_argv(&["-w", "-C", "h"]).mode, OutputMode::Csv);
+        let o = opts_argv(&["-w", "-t", "h"]);
+        assert_eq!((o.mode, o.report_wide), (OutputMode::Tui, true));
+        assert!(o.config.interactive);
+        let o = opts_argv(&["-r", "-c", "3", "h"]);
+        assert!(!o.config.interactive && o.config.force_max_ping);
     }
 
     #[test]

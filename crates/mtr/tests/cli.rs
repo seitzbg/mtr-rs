@@ -122,3 +122,20 @@ fn dash_f_names_precede_positional_names() {
         .unwrap_or_else(|| panic!("no resolution failure in stderr: {err}"));
     assert!(first.contains("a.invalid"), "{err}");
 }
+
+#[test]
+fn last_mode_flag_wins_like_getopt() {
+    // `-j` then `-r`: report mode → prints "Start:" (JSON never does)
+    let mut c = mtr();
+    c.env(
+        "MTR_PACKET",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-mtr-packet.py"),
+    );
+    let o = c
+        .args(["-j", "-r", "-n", "-c", "1", "-G", "0.2", "192.0.2.1"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert_eq!(o.status.code(), Some(0), "{out}");
+    assert!(out.starts_with("Start: "), "{out}");
+}

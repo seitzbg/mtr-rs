@@ -14,7 +14,6 @@ pub mod target;
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use clap::Parser as _;
 use mtr_core::Engine;
 
 use crate::cli::{AddressFamily, Args, Options, OutputMode, Target};
@@ -66,7 +65,7 @@ enum TargetOutcome {
 
 /// Parse, validate and run every target; returns the process exit code.
 pub async fn run(argv: Vec<String>) -> i32 {
-    let mut args = match Args::try_parse_from(argv) {
+    let mut args = match Args::parse_argv(argv) {
         Ok(a) => a,
         Err(e) => {
             let code = if e.use_stderr() { 1 } else { 0 };
