@@ -6,4 +6,5 @@ pub mod asn;
 pub mod cli;
 pub mod names;
 pub mod options;
+pub mod resolver;
 pub mod target;
