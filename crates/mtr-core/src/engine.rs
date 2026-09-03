@@ -422,8 +422,9 @@ impl Engine {
             UserAction::SetBitPattern(n) => self.cfg.bit_pattern = n,
             UserAction::SetTos(t) => self.cfg.tos = t,
             UserAction::SetFirstTtl(t) => {
+                // curses.c:302-317: the `f` key only changes fstTTL; statistics are kept.
                 self.cfg.first_ttl = t.clamp(1, self.cfg.max_ttl.max(1));
-                self.reset();
+                self.batch_at = self.batch_at.max(self.min_hop());
             }
             UserAction::SetMaxTtl(t) => self.cfg.max_ttl = t.max(self.cfg.first_ttl.max(1)),
             UserAction::CycleProtocol => {
@@ -918,6 +919,22 @@ mod tests {
         let cmds = e.handle(Event::Tick, t0 + Duration::from_millis(100));
         assert_eq!(sends(&cmds)[0].0, 33001);
         assert_eq!(sends(&cmds)[0].1.ttl, Some(1)); // batch_at went back to fstTTL-1
+    }
+
+    #[test]
+    fn set_first_ttl_keeps_statistics_like_the_curses_f_key() {
+        let (mut e, t0) = engine(cfg());
+        e.handle(Event::Tick, t0);
+        e.handle(probe(33000, "10.0.0.1", 100), t0);
+        e.handle(Event::Action(UserAction::SetFirstTtl(2)), t0);
+        assert_eq!(e.hops()[0].stats.returned, 1, "no reset");
+        assert_eq!(e.min_hop(), 1);
+        let cmds = e.handle(Event::Tick, t0 + Duration::from_millis(100));
+        assert_eq!(
+            sends(&cmds)[0].1.ttl,
+            Some(2),
+            "batch_at realigned to the new first hop"
+        );
     }
 
     #[test]
