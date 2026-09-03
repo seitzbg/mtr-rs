@@ -58,6 +58,8 @@ fn help_overlay_prompt_and_too_small() {
     let mut f = snapshot_fixture(false);
     f.ui.help = true;
     insta::assert_snapshot!("unicode_80x24_help", render(&f, 80, 24));
+    // spec-minimum terminal: the help box is vertically clipped, not wrapped/lost horizontally
+    insta::assert_snapshot!("unicode_60x12_help", render(&f, 60, 12));
     f.ui.help = false;
     f.ui.prompt = Some(Prompt {
         kind: PromptKind::Interval,
@@ -65,4 +67,11 @@ fn help_overlay_prompt_and_too_small() {
     });
     insta::assert_snapshot!("unicode_80x24_prompt", render(&f, 80, 24));
     insta::assert_snapshot!("too_small_50x10", render(&f, 50, 10));
+}
+
+#[test]
+fn ascii_help_overlay() {
+    let mut f = snapshot_fixture(true);
+    f.ui.help = true;
+    insta::assert_snapshot!("ascii_80x24_help", render(&f, 80, 24));
 }

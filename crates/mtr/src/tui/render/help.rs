@@ -4,16 +4,21 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph, Widget};
+use ratatui::widgets::{Block, Clear, Paragraph, Widget, Wrap};
 
 use crate::tui::render::View;
 
+/// Every line here must fit in the help box's 70-column interior (`min(area.width-4, 72) - 2`
+/// border columns) so `Paragraph` never has to wrap the two-column key layout; see the unit test
+/// below. `o str` doesn't fit alongside `u|t` at that width, so it gets its own line instead of
+/// having its `(default LS NABWV)` clipped.
 pub const HELP: &str = "\
 ?|h     help                       q       quit
 p       pause (SPACE to resume)    r       reset all counters
 n       toggle DNS on/off          z|y     toggle ASN info on/off
 e       toggle MPLS on/off         d       toggle Recent column
-u|t     cycle ICMP/UDP/TCP         o str   set the columns (default LS NABWV)
+u|t     cycle ICMP/UDP/TCP
+o str   set the columns (default LS NABWV)
 i <n>   interval in seconds        f <n>   first TTL
 m <n>   max TTL                    s <n>   packet size (n<0: random)
 b <c>   bit pattern (-1: random)   Q <t>   TOS
@@ -36,5 +41,27 @@ pub fn render(view: &View, area: Rect, buf: &mut Buffer) {
     let block = Block::bordered()
         .border_set(view.glyphs.border)
         .title(Line::from(Span::styled(" Keys ", view.palette.header())));
-    Paragraph::new(HELP).block(block).render(box_area, buf);
+    // Fallback for boxes narrower than 70 interior columns (e.g. the 60x12 spec-minimum
+    // terminal): wrap rather than silently clip.
+    Paragraph::new(HELP)
+        .block(block)
+        .wrap(Wrap { trim: false })
+        .render(box_area, buf);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HELP;
+    use crate::width::display_width;
+
+    #[test]
+    fn every_help_line_fits_the_70_column_box_interior() {
+        for line in HELP.lines() {
+            assert!(
+                display_width(line) <= 70,
+                "line {line:?} is {} columns wide, want <= 70",
+                display_width(line)
+            );
+        }
+    }
 }
