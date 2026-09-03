@@ -3,10 +3,12 @@
 
 pub mod glyphs;
 pub mod palette;
+pub mod state;
 pub mod terminal;
 
 pub use glyphs::Glyphs;
 pub use palette::{Depth, Palette};
+pub use state::{Bounds, DetailTab, PromptKind, Quit, UiAction, UiState};
 
 /// The single protocol-name mapping; used by the header (Task 10) and by
 /// `input::toggle_status` (Task 8).
