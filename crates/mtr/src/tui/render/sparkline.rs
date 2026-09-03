@@ -56,7 +56,9 @@ impl Scale {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cell {
-    Rtt(usize),
+    /// Bar height bucket (relative, `Scale::bucket`) and the sample's raw RTT in microseconds
+    /// (for `Palette::rtt`'s absolute colour — deviation 25).
+    Rtt(usize, u32),
     Lost,
     Pending,
 }
@@ -68,16 +70,27 @@ pub fn cells(history: &History, width: usize, scale: &Scale) -> Vec<Cell> {
     let mut out = Vec::with_capacity(width);
     out.resize(width.saturating_sub(n), Cell::Pending);
     out.extend(history.iter().skip(skip).map(|s| match s {
-        Sample::Rtt(us) => Cell::Rtt(scale.bucket(*us)),
+        Sample::Rtt(us) => Cell::Rtt(scale.bucket(*us), *us),
         Sample::Lost => Cell::Lost,
         Sample::Pending { .. } => Cell::Pending,
     }));
     out
 }
 
+/// Sparkline cells for a table row: a hop that has never received any reply renders as a blank
+/// row (all `Pending`) — its Loss% cell already says 100 %, so a full-height loss slab would just
+/// repeat that in a way that reads badly (deviation: never-answered hops are blank, not lossy).
+pub fn cells_for_hop(hop: &Hop, width: usize, scale: &Scale) -> Vec<Cell> {
+    if hop.received() == 0 {
+        vec![Cell::Pending; width]
+    } else {
+        cells(&hop.history, width, scale)
+    }
+}
+
 pub fn glyph(cell: &Cell, g: &Glyphs) -> &'static str {
     match cell {
-        Cell::Rtt(b) => g.bars[(*b).min(BUCKETS - 1)],
+        Cell::Rtt(b, _) => g.bars[(*b).min(BUCKETS - 1)],
         Cell::Lost => g.loss,
         Cell::Pending => g.pending,
     }
@@ -155,20 +168,48 @@ mod tests {
             vec![
                 Cell::Pending,
                 Cell::Pending,
-                Cell::Rtt(0),
+                Cell::Rtt(0, 0),
                 Cell::Lost,
-                Cell::Rtt(7)
+                Cell::Rtt(7, 8000)
             ]
         );
         let c = cells(&h.history, 2, &s);
         assert_eq!(
             c,
-            vec![Cell::Lost, Cell::Rtt(7)],
+            vec![Cell::Lost, Cell::Rtt(7, 8000)],
             "only the newest `width` samples"
         );
-        assert_eq!(glyph(&Cell::Rtt(7), &UNICODE), "█");
-        assert_eq!(glyph(&Cell::Lost, &UNICODE), "░");
+        assert_eq!(glyph(&Cell::Rtt(7, 8000), &UNICODE), "█");
+        assert_eq!(glyph(&Cell::Lost, &UNICODE), "•");
         assert_eq!(glyph(&Cell::Lost, &ASCII), "x");
         assert_eq!(glyph(&Cell::Pending, &ASCII), " ");
+    }
+
+    #[test]
+    fn never_answered_hop_renders_as_all_pending() {
+        let h = hop_with(&[Sample::Lost, Sample::Lost, Sample::Lost]);
+        assert_eq!(h.received(), 0);
+        let s = Scale {
+            low_us: 0,
+            high_us: 0,
+        };
+        assert_eq!(cells_for_hop(&h, 4, &s), vec![Cell::Pending; 4]);
+    }
+
+    #[test]
+    fn answered_hop_with_a_drop_still_shows_the_lost_cell() {
+        let mut h = hop_with(&[Sample::Rtt(1000), Sample::Lost]);
+        // `hop_with` only pokes the history ring, not `stats.returned` (that's `record_reply`'s
+        // job); set it directly so `received() > 0` matches "this hop does answer".
+        h.stats.returned = 1;
+        assert!(h.received() > 0);
+        let s = Scale {
+            low_us: 1000,
+            high_us: 1000,
+        };
+        assert_eq!(
+            cells_for_hop(&h, 2, &s),
+            vec![Cell::Rtt(0, 1000), Cell::Lost]
+        );
     }
 }

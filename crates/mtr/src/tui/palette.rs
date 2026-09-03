@@ -80,13 +80,14 @@ impl Palette {
         }
     }
 
-    /// Bucket `b` (0 = fastest .. 7 = slowest) of the sparkline scale; the shape of `block_col`.
-    pub fn bucket(&self, b: usize) -> Style {
-        match b.min(7) {
-            0..=2 => self.green(),
-            3..=4 => self.yellow(),
-            5 => self.magenta(),
-            6 => self.red(),
+    /// RTT cell/bar colour on fixed, path-independent thresholds (deviation 25): < 30 ms green,
+    /// < 100 ms yellow, < 200 ms magenta, < 500 ms red, >= 500 ms bold red.
+    pub fn rtt(&self, us: u32) -> Style {
+        match us {
+            u if u < 30_000 => self.green(),
+            u if u < 100_000 => self.yellow(),
+            u if u < 200_000 => self.magenta(),
+            u if u < 500_000 => self.red(),
             _ => self.red().add_modifier(Modifier::BOLD),
         }
     }
@@ -108,6 +109,11 @@ impl Palette {
     }
     pub fn alert(&self) -> Style {
         self.yellow().add_modifier(Modifier::BOLD)
+    }
+    /// A single lost probe in the sparkline column on a hop that does answer: plain red, not the
+    /// bold 100 %-loss style (that would visually equate one drop with total loss).
+    pub fn lost_sample(&self) -> Style {
+        self.red()
     }
 }
 
@@ -142,37 +148,35 @@ mod tests {
     }
 
     #[test]
+    fn lost_sample_is_plain_red_not_bold() {
+        let p = Palette::new(Depth::Ansi16);
+        assert_eq!(p.lost_sample().fg, Some(Color::Red));
+        assert!(!p.lost_sample().add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
     fn mono_has_no_colours_but_keeps_attributes() {
         let p = Palette::new(Depth::Mono);
         assert_eq!(p.loss(100_000).fg, None);
         assert!(p.loss(100_000).add_modifier.contains(Modifier::BOLD));
-        assert_eq!(p.bucket(7).fg, None);
+        assert_eq!(p.rtt(999_999).fg, None);
         assert!(p.selected().add_modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
-    fn buckets_follow_block_col_shape() {
-        // curses.c:91-102 collapsed to 8: green ×3, yellow ×2, magenta, red ×2
+    fn rtt_colours_follow_fixed_absolute_thresholds() {
         let p = Palette::new(Depth::Ansi16);
-        let fg: Vec<_> = (0..8).map(|b| p.bucket(b).fg.unwrap()).collect();
-        assert_eq!(
-            fg,
-            [
-                Color::Green,
-                Color::Green,
-                Color::Green,
-                Color::Yellow,
-                Color::Yellow,
-                Color::Magenta,
-                Color::Red,
-                Color::Red
-            ]
-        );
-        assert!(p.bucket(7).add_modifier.contains(Modifier::BOLD));
-        assert_eq!(
-            p.bucket(99).fg,
-            Some(Color::Red),
-            "out of range clamps to the top bucket"
-        );
+        assert_eq!(p.rtt(0).fg, Some(Color::Green));
+        assert_eq!(p.rtt(29_999).fg, Some(Color::Green));
+        assert_eq!(p.rtt(30_000).fg, Some(Color::Yellow));
+        assert_eq!(p.rtt(99_999).fg, Some(Color::Yellow));
+        assert_eq!(p.rtt(100_000).fg, Some(Color::Magenta));
+        assert_eq!(p.rtt(199_999).fg, Some(Color::Magenta));
+        assert_eq!(p.rtt(200_000).fg, Some(Color::Red));
+        assert!(!p.rtt(200_000).add_modifier.contains(Modifier::BOLD));
+        assert_eq!(p.rtt(499_999).fg, Some(Color::Red));
+        assert!(!p.rtt(499_999).add_modifier.contains(Modifier::BOLD));
+        assert_eq!(p.rtt(500_000).fg, Some(Color::Red));
+        assert!(p.rtt(500_000).add_modifier.contains(Modifier::BOLD));
     }
 }
