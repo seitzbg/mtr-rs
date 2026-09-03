@@ -14,7 +14,7 @@ use crate::asn;
 use crate::names::addr_name;
 use crate::tui::render::{View, ms};
 use crate::tui::state::DetailTab;
-use crate::width::{pad_right, truncate_to};
+use crate::width::{display_width, pad_right, truncate_with_ellipsis};
 
 pub fn nice_ceiling(max_ms: f64) -> f64 {
     if max_ms.is_nan() || max_ms <= 1.0 {
@@ -199,18 +199,42 @@ fn render_rtt(view: &View, hop: &Hop, inner: Rect, buf: &mut Buffer) {
     }
 }
 
-/// Column widths of the Addresses tab; the six columns plus their separators fit `MIN_WIDTH`.
-const IP_W: usize = 24;
-const NAME_W: usize = 15;
+/// Fixed Addresses columns: ASN, Count, Last, First seen and the five two-cell separators.
 const ASN_W: usize = 8;
+const COUNT_W: usize = 5;
+const LAST_W: usize = 6;
+const FIRST_W: usize = 10;
+const SEPARATORS: usize = 10;
+/// Neither text column ever shrinks below this.
+const MIN_TEXT_W: usize = 4;
+
+/// Split what the fixed columns leave over between IP and Name: the address column takes the width
+/// it needs, but never less than 60 % of the remainder, and both keep `MIN_TEXT_W` columns.
+fn address_columns(width: usize, widest_ip: usize) -> (usize, usize) {
+    let rem = width
+        .saturating_sub(ASN_W + COUNT_W + LAST_W + FIRST_W + SEPARATORS)
+        .max(2 * MIN_TEXT_W);
+    let hi = rem - MIN_TEXT_W;
+    let lo = ((rem * 3).div_ceil(5)).min(hi);
+    let ip = widest_ip.clamp(lo, hi);
+    (ip, rem - ip)
+}
 
 fn render_addresses(view: &View, hop: &Hop, inner: Rect, buf: &mut Buffer) {
     let cfg = view.engine.config();
     let pal = view.palette;
+    let ell = view.glyphs.ellipsis;
+    let widest = hop
+        .addrs
+        .iter()
+        .map(|a| display_width(&a.addr.to_string()))
+        .max()
+        .unwrap_or(0);
+    let (ip_w, name_w) = address_columns(usize::from(inner.width), widest);
     let head = format!(
-        "{}  {}  {}  {:>5}  {:>6}  {}",
-        pad_right("IP", IP_W),
-        pad_right("Name", NAME_W),
+        "{}  {}  {}  {:>COUNT_W$}  {:>LAST_W$}  {}",
+        pad_right("IP", ip_w),
+        pad_right("Name", name_w),
         pad_right("ASN", ASN_W),
         "Count",
         "Last",
@@ -231,10 +255,13 @@ fn render_addresses(view: &View, hop: &Hop, inner: Rect, buf: &mut Buffer) {
             .unwrap_or_else(|| "-".into());
         let first = view.now.saturating_duration_since(a.first_seen).as_secs();
         let row = format!(
-            "{}  {}  {}  {:>5}  {:>6}  -{first}s",
-            pad_right(truncate_to(&a.addr.to_string(), IP_W), IP_W),
-            pad_right(truncate_to(name, NAME_W), NAME_W),
-            pad_right(truncate_to(&asn, ASN_W), ASN_W),
+            "{}  {}  {}  {:>COUNT_W$}  {:>LAST_W$}  -{first}s",
+            pad_right(
+                &truncate_with_ellipsis(&a.addr.to_string(), ip_w, ell),
+                ip_w
+            ),
+            pad_right(&truncate_with_ellipsis(name, name_w, ell), name_w),
+            pad_right(&truncate_with_ellipsis(&asn, ASN_W, ell), ASN_W),
             a.count,
             ms(a.last_rtt as i32)
         );
@@ -301,6 +328,7 @@ mod tests {
     use crate::tui::state::DetailTab;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use std::time::Duration;
 
     #[test]
     fn nice_ceilings() {
@@ -367,6 +395,66 @@ mod tests {
         assert!(
             (2..8).all(|y| !row_text(&buf, y).contains(" ms")),
             "only one y label carries the unit"
+        );
+    }
+
+    /// One hop answering from a long IPv6 address, for the truncation cases.
+    fn ipv6_fixture() -> crate::testing::Fixture {
+        use crate::testing::{Answer, drive, ip};
+        let cfg = mtr_core::Config {
+            max_ping: 1,
+            force_max_ping: true,
+            grace_time: 0.1,
+            ..mtr_core::Config::default()
+        };
+        let (engine, end) = drive(cfg, |ttl, _| Answer::Reply {
+            addr: if ttl == 1 {
+                ip("2001:db8:85a3::8a2e:370:7334")
+            } else {
+                ip("192.0.2.10")
+            },
+            rtt_us: 500,
+            mpls: vec![],
+        });
+        let mut f = crate::testing::Fixture::around(engine, end + Duration::from_secs(1));
+        f.ui.tab = DetailTab::Addresses;
+        f
+    }
+
+    #[test]
+    fn addresses_fit_the_narrowest_pane_and_mark_truncation() {
+        let mut f = view_fixture();
+        f.ui.selected = 0;
+        f.ui.tab = DetailTab::Addresses;
+        let area = Rect::new(0, 0, crate::tui::render::MIN_WIDTH, 9);
+        let mut buf = Buffer::empty(area);
+        render(&f.view(), area, &mut buf);
+        let head = row_text(&buf, 1);
+        for c in ["IP", "Name", "ASN", "Count", "Last", "First seen"] {
+            assert!(head.contains(c), "{c} missing from {head:?}");
+        }
+        let r = row_text(&buf, 2);
+        assert!(
+            r.contains("10.0.0.1")
+                && r.contains(" 2 ")
+                && r.contains("0.5")
+                && r.trim_end_matches(['│', ' ']).ends_with('s'),
+            "{r:?}"
+        );
+        // an address wider than its column keeps a marker to say so
+        let mut f = ipv6_fixture();
+        let mut buf = Buffer::empty(area);
+        render(&f.view(), area, &mut buf);
+        let r = row_text(&buf, 2);
+        assert!(r.contains("2001:db8") && r.contains('…'), "{r:?}");
+        assert!(row_text(&buf, 1).contains("First seen"), "narrow header");
+        f.glyphs = crate::tui::glyphs::Glyphs::select(true);
+        let mut buf = Buffer::empty(area);
+        render(&f.view(), area, &mut buf);
+        let r = row_text(&buf, 2);
+        assert!(
+            r.contains("2001:db8") && r.contains('~') && r.is_ascii(),
+            "{r:?}"
         );
     }
 

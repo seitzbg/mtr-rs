@@ -15,6 +15,8 @@ pub struct Glyphs {
     pub arrow: &'static str,
     /// Separator between the detail pane's tab titles.
     pub divider: &'static str,
+    /// Marks a value the detail pane had to cut short.
+    pub ellipsis: &'static str,
     pub border: border::Set<'static>,
     pub marker: Marker,
 }
@@ -27,6 +29,7 @@ pub static UNICODE: Glyphs = Glyphs {
     lost_mark: "×",
     arrow: "→",
     divider: "│",
+    ellipsis: "…",
     border: border::ROUNDED,
     marker: Marker::Braille,
 };
@@ -39,6 +42,7 @@ pub static ASCII: Glyphs = Glyphs {
     lost_mark: "x",
     arrow: "->",
     divider: "|",
+    ellipsis: "~",
     border: border::Set {
         top_left: "+",
         top_right: "+",
@@ -73,10 +77,12 @@ mod tests {
             ASCII.lost_mark,
             ASCII.arrow,
             ASCII.divider,
+            ASCII.ellipsis,
         ] {
             assert!(g.is_ascii(), "{g:?}");
         }
         assert_eq!(UNICODE.divider, "│");
+        assert_eq!((UNICODE.ellipsis, ASCII.ellipsis), ("…", "~"));
         assert!(ASCII.bars.iter().all(|b| b.is_ascii() && b.len() == 1));
         assert!(std::ptr::eq(Glyphs::select(true), &ASCII));
         assert!(std::ptr::eq(Glyphs::select(false), &UNICODE));
