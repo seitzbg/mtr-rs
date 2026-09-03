@@ -545,4 +545,74 @@ mod tests {
         assert_eq!(e.raw_os_error(), Some(nix::libc::EINVAL));
         t.remove(i);
     }
+
+    #[test]
+    fn icmpv6_echo_to_loopback_gets_a_reply_with_the_full_address() {
+        let Some(mut b) = backend(6) else { return };
+        // Loopback IPv6 only — this box has no global unicast address (see Box facts).
+        assert!(b.ip_version_supported(6));
+        let mut t = ProbeTable::new();
+        let p = CProbeParams {
+            ip_version: 6,
+            remote_address: Some("::1".into()),
+            ..Default::default()
+        };
+        let i = t.alloc(52, Instant::now(), 5).unwrap();
+        b.send_probe(&mut t, i, &p).unwrap();
+        let out = pump(&mut b, &mut t, Duration::from_secs(3), |o| !o.is_empty());
+        match &out[0].kind {
+            ResponseKind::Probe {
+                result: ProbeResult::Reply,
+                addr,
+                ..
+            } => assert_eq!(addr.to_string(), "::1"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            out[0].encode(),
+            format!(
+                "52 reply ip-6 ::1 round-trip-time {}\n",
+                match &out[0].kind {
+                    ResponseKind::Probe { rtt_us, .. } => rtt_us,
+                    _ => unreachable!(),
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn icmpv6_documentation_prefix_times_out_or_is_unroutable() {
+        let Some(mut b) = backend(6) else { return };
+        let mut t = ProbeTable::new();
+        let p = CProbeParams {
+            ip_version: 6,
+            remote_address: Some("2001:db8::1".into()),
+            timeout: 1,
+            ..Default::default()
+        };
+        let i = t.alloc(53, Instant::now(), 1).unwrap();
+        match b.send_probe(&mut t, i, &p) {
+            Ok(()) => {
+                let out = pump(&mut b, &mut t, Duration::from_secs(3), |o| !o.is_empty());
+                assert!(
+                    matches!(
+                        out[0].kind,
+                        ResponseKind::NoReply
+                            | ResponseKind::Probe {
+                                result: ProbeResult::NoRouteHost,
+                                ..
+                            }
+                    ),
+                    "{out:?}"
+                );
+            }
+            Err(e) => assert!(
+                matches!(
+                    e.raw_os_error(),
+                    Some(nix::libc::ENETUNREACH | nix::libc::EHOSTUNREACH)
+                ),
+                "{e}"
+            ),
+        }
+    }
 }

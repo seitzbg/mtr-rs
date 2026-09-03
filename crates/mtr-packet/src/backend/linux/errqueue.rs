@@ -8,6 +8,13 @@ use std::os::fd::AsRawFd;
 use nix::sys::socket::{ControlMessageOwned, MsgFlags, SockaddrStorage, recvmsg};
 use socket2::Socket;
 
+// protocols.h:22-38 — the two families number these differently, which is the whole point.
+// One definition each, in deconstruct.rs (Task 9).
+use super::deconstruct::{
+    ICMP_DEST_UNREACH, ICMP_PORT_UNREACH, ICMP_TIME_EXCEEDED, ICMP6_DEST_UNREACH,
+    ICMP6_PORT_UNREACH, ICMP6_TIME_EXCEEDED,
+};
+
 /// Which of C's two error-queue cases (probe_unix.c:772-789) an entry belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueuedError {
@@ -18,6 +25,27 @@ pub enum QueuedError {
     Refused,
     /// Any other destination-unreachable: `no-route-host`.
     Unreachable,
+}
+
+/// ICMPv4 type/code → the kind of queued error, or `None` when the type is not an error at all.
+pub fn kind_from_icmp4(ee_type: u8, ee_code: u8) -> Option<QueuedError> {
+    match (ee_type, ee_code) {
+        (ICMP_TIME_EXCEEDED, _) => Some(QueuedError::TimeExceeded),
+        (ICMP_DEST_UNREACH, ICMP_PORT_UNREACH) => Some(QueuedError::Refused),
+        (ICMP_DEST_UNREACH, _) => Some(QueuedError::Unreachable),
+        _ => None,
+    }
+}
+
+/// ICMPv6 type/code → ditto. Type 3 is time-exceeded here (not 11), and "port unreachable" is
+/// type 1 code 4 (not 3/3); echo request/reply are 128/129 and are never errors.
+pub fn kind_from_icmp6(ee_type: u8, ee_code: u8) -> Option<QueuedError> {
+    match (ee_type, ee_code) {
+        (ICMP6_TIME_EXCEEDED, _) => Some(QueuedError::TimeExceeded),
+        (ICMP6_DEST_UNREACH, ICMP6_PORT_UNREACH) => Some(QueuedError::Refused),
+        (ICMP6_DEST_UNREACH, _) => Some(QueuedError::Unreachable),
+        _ => None,
+    }
 }
 
 /// After `recv_from` failed with `EHOSTUNREACH`/`ECONNREFUSED`, read the queued error: the
@@ -48,20 +76,31 @@ pub fn read_error(
         Err(e) => return Err(e.into()),
     };
     let mut offender = None;
+    let mut kind = fallback;
     for c in msg.cmsgs()? {
         match c {
-            ControlMessageOwned::Ipv4RecvErr(_, Some(sin)) => {
-                offender = Some(IpAddr::V4(Ipv4Addr::from(u32::from_be(
-                    sin.sin_addr.s_addr,
-                ))));
+            ControlMessageOwned::Ipv4RecvErr(err, addr) => {
+                if let Some(sin) = addr {
+                    offender = Some(IpAddr::V4(Ipv4Addr::from(u32::from_be(
+                        sin.sin_addr.s_addr,
+                    ))));
+                }
+                if err.ee_origin == nix::libc::SO_EE_ORIGIN_ICMP {
+                    kind = kind_from_icmp4(err.ee_type, err.ee_code).unwrap_or(fallback);
+                }
             }
-            ControlMessageOwned::Ipv6RecvErr(_, Some(sin6)) => {
-                offender = Some(IpAddr::V6(Ipv6Addr::from(sin6.sin6_addr.s6_addr)));
+            ControlMessageOwned::Ipv6RecvErr(err, addr) => {
+                if let Some(sin6) = addr {
+                    offender = Some(IpAddr::V6(Ipv6Addr::from(sin6.sin6_addr.s6_addr)));
+                }
+                if err.ee_origin == nix::libc::SO_EE_ORIGIN_ICMP6 {
+                    kind = kind_from_icmp6(err.ee_type, err.ee_code).unwrap_or(fallback);
+                }
             }
             _ => {}
         }
     }
-    Ok(offender.map(|a| (a, msg.bytes, fallback)))
+    Ok(offender.map(|a| (a, msg.bytes, kind)))
 }
 
 #[cfg(test)]
@@ -110,6 +149,25 @@ mod tests {
         assert_eq!(
             read_error(&sock, &mut buf, QueuedError::Refused).unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn icmp_type_and_code_decide_the_queued_kind_per_family() {
+        // IPv4: time-exceeded 11, dest-unreach 3 with code 3 = port.
+        assert_eq!(kind_from_icmp4(11, 0), Some(QueuedError::TimeExceeded));
+        assert_eq!(kind_from_icmp4(3, 3), Some(QueuedError::Refused));
+        assert_eq!(kind_from_icmp4(3, 1), Some(QueuedError::Unreachable));
+        assert_eq!(kind_from_icmp4(0, 0), None, "echo reply is not an error");
+        // IPv6: time-exceeded 3, dest-unreach 1 with code 4 = port. The v4 numbers must not leak.
+        assert_eq!(kind_from_icmp6(3, 0), Some(QueuedError::TimeExceeded));
+        assert_eq!(kind_from_icmp6(1, 4), Some(QueuedError::Refused));
+        assert_eq!(kind_from_icmp6(1, 3), Some(QueuedError::Unreachable));
+        assert_eq!(kind_from_icmp6(129, 0), None, "echo reply is not an error");
+        assert_eq!(
+            kind_from_icmp6(11, 0),
+            None,
+            "type 11 has no meaning in ICMPv6"
         );
     }
 }
