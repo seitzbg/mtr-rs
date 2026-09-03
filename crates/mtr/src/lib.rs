@@ -238,7 +238,11 @@ async fn run_target(
             // `q --report-on-exit` reports in-flight probes as drops too (spec §8.3).
             driver.engine.end_transit();
         }
-        driver.drain_lookups(Duration::from_secs(2)).await;
+        // Only wait for in-flight PTR/ASN lookups when something below will print them: the TUI
+        // without --report-on-exit prints nothing, and `q` should not stall on a blank terminal.
+        if opts.mode != OutputMode::Tui || opts.report_on_exit {
+            driver.drain_lookups(Duration::from_secs(2)).await;
+        }
         outcome.interrupted
     };
     let ctx = emit::ReportContext {
