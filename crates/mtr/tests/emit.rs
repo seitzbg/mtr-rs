@@ -424,3 +424,18 @@ fn start_line_uses_iso_time_with_numeric_offset() {
     let z: jiff::Zoned = "2026-09-02T12:41:07+02:00[+02:00]".parse().unwrap();
     assert_eq!(report::start_line(&z), "Start: 2026-09-02T12:41:07+0200");
 }
+
+#[test]
+fn wide_report_pads_by_display_width_not_chars() {
+    let e = finished_engine(base_cfg());
+    let mut names = NameCache::default();
+    names.insert_name(ip("10.0.0.1"), "日本.example");
+    let out = report::render(&ctx(&e, &names, true));
+    // every stats block starts at the same column: the Loss% '%' must line up on all rows
+    let cols: Vec<usize> = out
+        .lines()
+        .skip(1)
+        .map(|l| mtr::width::display_width(&l[..l.find('%').unwrap()]))
+        .collect();
+    assert!(cols.iter().all(|c| *c == cols[0]), "{out}");
+}

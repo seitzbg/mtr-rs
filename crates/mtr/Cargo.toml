@@ -23,3 +23,4 @@ nix.workspace = true
 socket2.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+unicode-width.workspace = true
