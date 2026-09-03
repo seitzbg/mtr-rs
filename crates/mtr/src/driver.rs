@@ -53,6 +53,7 @@ impl Driver<'_> {
                 res = lookups => Wake::Lookup(res),
                 _ = &mut ctrl_c => Wake::CtrlC,
             };
+            let from_engine = matches!(wake, Wake::Tick | Wake::Helper(_));
             let cmds = match wake {
                 Wake::Tick => self.engine.handle(Event::Tick, Instant::now()),
                 Wake::Helper(Some(HelperEvent::Response(r))) => {
@@ -79,8 +80,8 @@ impl Driver<'_> {
                 Wake::CtrlC => return Ok(RunOutcome { interrupted: true }),
             };
             let mut finished = false;
-            for c in cmds {
-                match c {
+            for c in &cmds {
+                match c.clone() {
                     Command::SendProbe { token, params } => self
                         .helper
                         .tx
@@ -91,10 +92,11 @@ impl Driver<'_> {
                         .await
                         .context("mtr-packet command pipe write failure")?,
                     Command::Resolve(ip) => self.request_lookups(ip).await,
-                    Command::NextWake(t) => deadline = Some(t),
+                    Command::NextWake(_) => {}
                     Command::Finished => finished = true,
                 }
             }
+            deadline = next_deadline(deadline, &cmds, from_engine);
             if finished {
                 return Ok(RunOutcome { interrupted: false });
             }
@@ -127,5 +129,54 @@ impl Driver<'_> {
                 _ => break,
             }
         }
+    }
+}
+
+/// The next wake deadline given the previous one and a processed command batch.
+///
+/// When `cmds` came from an engine call (`Wake::Tick` or `Wake::Helper`), the engine is
+/// authoritative: a `Command::NextWake` sets the new deadline, and its absence (the engine is
+/// paused) clears it, so the driver goes back to sleep indefinitely instead of busy-looping on an
+/// already-elapsed deadline. When `cmds` did not come from an engine call (`Wake::Lookup`), the
+/// engine was not asked and the deadline is left untouched.
+fn next_deadline(current: Option<Instant>, cmds: &[Command], from_engine: bool) -> Option<Instant> {
+    if !from_engine {
+        return current;
+    }
+    cmds.iter().find_map(|c| match c {
+        Command::NextWake(t) => Some(*t),
+        _ => None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mtr_proto::ProbeParams;
+
+    #[test]
+    fn engine_batch_with_next_wake_sets_deadline() {
+        let now = Instant::now();
+        let t = now + Duration::from_secs(1);
+        let cmds = vec![Command::NextWake(t)];
+        assert_eq!(next_deadline(Some(now), &cmds, true), Some(t));
+    }
+
+    #[test]
+    fn engine_batch_without_next_wake_clears_deadline() {
+        let now = Instant::now();
+        let cmds = vec![Command::SendProbe {
+            token: 1,
+            params: ProbeParams::new("192.0.2.1".parse().unwrap()),
+        }];
+        assert_eq!(next_deadline(Some(now), &cmds, true), None);
+    }
+
+    #[test]
+    fn lookup_batch_leaves_deadline_unchanged() {
+        let now = Instant::now();
+        let cmds: Vec<Command> = Vec::new();
+        assert_eq!(next_deadline(Some(now), &cmds, false), Some(now));
+        assert_eq!(next_deadline(None, &cmds, false), None);
     }
 }
