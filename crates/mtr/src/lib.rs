@@ -11,10 +11,13 @@ pub mod names;
 pub mod options;
 pub mod resolver;
 pub mod target;
+#[doc(hidden)]
+pub mod testing;
+pub mod tui;
+pub mod width;
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use clap::Parser as _;
 use mtr_core::Engine;
 
 use crate::cli::{AddressFamily, Args, Options, OutputMode, Target};
@@ -52,6 +55,9 @@ pub async fn run_from_env() -> i32 {
     }
 }
 
+/// The TUI panic hook is process-wide; installing it per target would nest hooks.
+static PANIC_HOOK: std::sync::Once = std::sync::Once::new();
+
 enum Fatal {
     /// Skip this target, continue with the next one, exit 1 at the end (C: resolution failures).
     Skip(String),
@@ -66,7 +72,7 @@ enum TargetOutcome {
 
 /// Parse, validate and run every target; returns the process exit code.
 pub async fn run(argv: Vec<String>) -> i32 {
-    let mut args = match Args::try_parse_from(argv) {
+    let mut args = match Args::parse_argv(argv) {
         Ok(a) => a,
         Err(e) => {
             let code = if e.use_stderr() { 1 } else { 0 };
@@ -98,10 +104,6 @@ pub async fn run(argv: Vec<String>) -> i32 {
             return 1;
         }
     };
-    if opts.mode == OutputMode::Tui {
-        eprintln!("mtr: interactive mode is not implemented yet; use -r, -w, -j or -C");
-        return 1;
-    }
 
     // validate_report_targets() (ui/mtr.c:1089-1131): the first target's family becomes the
     // getaddrinfo() hint for every later target, so a dual-stack host follows the first one and
@@ -132,7 +134,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
 
     let mut exit_val = 0;
     for t in &opts.targets {
-        match run_target(&opts, t, af).await {
+        match run_target(&opts, t, af, is_root).await {
             Ok(TargetOutcome::Done) => {}
             Ok(TargetOutcome::Interrupted) => {
                 exit_val = 130;
@@ -155,7 +157,12 @@ pub async fn run(argv: Vec<String>) -> i32 {
     exit_val
 }
 
-async fn run_target(opts: &Options, t: &Target, af: AddressFamily) -> Result<TargetOutcome, Fatal> {
+async fn run_target(
+    opts: &Options,
+    t: &Target,
+    af: AddressFamily,
+    is_root: bool,
+) -> Result<TargetOutcome, Fatal> {
     let ip = target::resolve_target(&t.name, af)
         .await
         .map_err(Fatal::Skip)?;
@@ -195,20 +202,52 @@ async fn run_target(opts: &Options, t: &Target, af: AddressFamily) -> Result<Tar
         .unwrap_or(1);
     let mut engine = Engine::new(cfg, ip, local, Instant::now(), seed);
     let interrupted = {
-        let mut driver = Driver {
-            engine: &mut engine,
-            helper: &mut helper,
-            resolver: resolver.as_mut(),
-            names: &mut names,
+        let mut driver = Driver::new(&mut engine, &mut helper, resolver.as_mut(), &mut names);
+        let outcome = if opts.mode == OutputMode::Tui {
+            let guard =
+                tui::terminal::enter().map_err(|e| Fatal::Abort(format!("terminal: {e}")))?;
+            // Only once, and only with a live Guard: the hook restores the terminal, which is a
+            // no-op at best and stray escape bytes at worst when no TUI is running.
+            PANIC_HOOK.call_once(tui::terminal::install_panic_hook);
+            let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
+            let mut term = ratatui::Terminal::new(backend)
+                .map_err(|e| Fatal::Abort(format!("terminal: {e}")))?;
+            let tui_opts = tui::TuiOptions {
+                glyphs: tui::Glyphs::select(opts.ascii),
+                palette: tui::Palette::detect(opts.color),
+                is_root,
+                local_hostname: &local_hostname,
+                target_name: &t.name,
+            };
+            let r = tui::run(
+                &mut term,
+                &mut driver,
+                crossterm::event::EventStream::new(),
+                &tui_opts,
+            )
+            .await;
+            drop(guard); // restore before any message is printed
+            // `{:#}` keeps anyhow's context chain ("terminal input: <cause>").
+            let r = r.map_err(|e| Fatal::Abort(format!("{e:#}")))?;
+            driver::RunOutcome {
+                interrupted: r.interrupted,
+            }
+        } else {
+            driver
+                .run()
+                .await
+                .map_err(|e| Fatal::Abort(e.to_string()))?
         };
-        let outcome = driver
-            .run()
-            .await
-            .map_err(|e| Fatal::Abort(e.to_string()))?;
-        if outcome.interrupted {
-            driver.engine.end_transit(); // net_end_transit() before display_close()
+        if outcome.interrupted || opts.mode == OutputMode::Tui {
+            // display.c:145-152 calls net_end_transit() on every close path, not just Ctrl-C, so
+            // `q --report-on-exit` reports in-flight probes as drops too (spec §8.3).
+            driver.engine.end_transit();
         }
-        driver.drain_lookups(Duration::from_secs(2)).await;
+        // Only wait for in-flight PTR/ASN lookups when something below will print them: the TUI
+        // without --report-on-exit prints nothing, and `q` should not stall on a blank terminal.
+        if opts.mode != OutputMode::Tui || opts.report_on_exit {
+            driver.drain_lookups(Duration::from_secs(2)).await;
+        }
         outcome.interrupted
     };
     let ctx = emit::ReportContext {
@@ -229,7 +268,7 @@ async fn run_target(opts: &Options, t: &Target, af: AddressFamily) -> Result<Tar
                 .unwrap_or(0);
             print!("{}", emit::csv::render(&ctx, now));
         }
-        OutputMode::Tui => unreachable!("rejected before probing"),
+        OutputMode::Tui => print!("{}", emit::report_on_exit_text(&ctx, opts.report_on_exit)),
     }
     Ok(if interrupted {
         TargetOutcome::Interrupted

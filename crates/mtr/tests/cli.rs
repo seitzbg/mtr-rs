@@ -66,16 +66,6 @@ fn mtr_options_is_read_but_the_command_line_wins() {
 }
 
 #[test]
-fn interactive_mode_is_not_available_yet() {
-    let (code, _, err) = run(&["127.0.0.1"]);
-    assert_eq!(code, Some(1));
-    assert!(
-        err.contains("interactive mode is not implemented yet"),
-        "{err}"
-    );
-}
-
-#[test]
 fn unresolvable_target_fails_with_c_message() {
     let (code, _, err) = run(&["-r", "no-such-host.invalid"]);
     assert_eq!(code, Some(1));
@@ -121,4 +111,21 @@ fn dash_f_names_precede_positional_names() {
         .find(|l| l.contains("Failed to resolve host:"))
         .unwrap_or_else(|| panic!("no resolution failure in stderr: {err}"));
     assert!(first.contains("a.invalid"), "{err}");
+}
+
+#[test]
+fn last_mode_flag_wins_like_getopt() {
+    // `-j` then `-r`: report mode → prints "Start:" (JSON never does)
+    let mut c = mtr();
+    c.env(
+        "MTR_PACKET",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-mtr-packet.py"),
+    );
+    let o = c
+        .args(["-j", "-r", "-n", "-c", "1", "-G", "0.2", "192.0.2.1"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert_eq!(o.status.code(), Some(0), "{out}");
+    assert!(out.starts_with("Start: "), "{out}");
 }

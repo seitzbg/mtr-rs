@@ -13,7 +13,7 @@ pub mod stats;
 pub use config::Config;
 pub use engine::{Command, Engine, Event, UserAction};
 pub use fields::{FIELDS, Field, FieldFormat};
-pub use history::{History, Sample};
+pub use history::{History, HistoryEntry, Sample};
 pub use hop::{Hop, HopAddr, HopError, Reply};
 pub use rng::Rng;
 pub use stats::RttStats;

@@ -97,27 +97,41 @@ pub async fn lookup_ptr(resolver: &TokioResolver, ip: IpAddr) -> Option<String> 
         .filter(|s| is_useful_hostname(s))
 }
 
-/// First character-string of the first TXT record, split like `split_txtrec()`.
-/// Failures become `???`, which C also caches after a failed `res_query()` (asn.c:197-201).
-pub async fn lookup_asn(resolver: &TokioResolver, cfg: &ResolverConfig, ip: IpAddr) -> AsnInfo {
-    let qname = asn::query_name(ip, &cfg.provider4, &cfg.provider6);
-    match resolver.lookup(qname.as_str(), RecordType::TXT).await {
-        Ok(lookup) => lookup
-            .answers()
-            .iter()
-            .find_map(|r| match &r.data {
-                RData::TXT(t) => t
-                    .txt_data
-                    .first()
-                    .map(|b| asn::parse_txt(&String::from_utf8_lossy(b))),
-                _ => None,
-            })
-            .unwrap_or_else(AsnInfo::unknown),
+/// First character-string of the first TXT record of `qname`.
+async fn lookup_txt(resolver: &TokioResolver, qname: &str) -> Option<String> {
+    match resolver.lookup(qname, RecordType::TXT).await {
+        Ok(lookup) => lookup.answers().iter().find_map(|r| match &r.data {
+            RData::TXT(t) => t
+                .txt_data
+                .first()
+                .map(|b| String::from_utf8_lossy(b).into_owned()),
+            _ => None,
+        }),
         Err(e) => {
-            tracing::debug!("asn lookup {qname}: {e}");
-            AsnInfo::unknown()
+            tracing::debug!("txt lookup {qname}: {e}");
+            None
         }
     }
+}
+
+/// Origin AS record, then the AS name (spec §7.2). A failed origin lookup becomes `???`, which C
+/// also caches after a failed `res_query()` (asn.c:197-201); a failed name lookup leaves `name: None`.
+pub async fn lookup_asn(resolver: &TokioResolver, cfg: &ResolverConfig, ip: IpAddr) -> AsnInfo {
+    // Deviation: the AS-name zone must match the provider `query_name` actually used, not
+    // `ip.is_ipv6()` — a NAT64 address folds to the IPv4 zone (asn.c:329-332, 409-419).
+    let provider = asn::query_provider(ip, &cfg.provider4, &cfg.provider6);
+    let qname = asn::query_name(ip, &cfg.provider4, &cfg.provider6);
+    let mut info = lookup_txt(resolver, &qname)
+        .await
+        .map(|t| asn::parse_txt(&t))
+        .unwrap_or_else(AsnInfo::unknown);
+    if let Some(q) = asn::as_name_query(&info, asn::name_zone(provider)) {
+        info.name = lookup_txt(resolver, &q)
+            .await
+            .as_deref()
+            .and_then(asn::parse_as_name);
+    }
+    info
 }
 
 #[cfg(test)]
@@ -152,7 +166,12 @@ mod tests {
                     got_ptr = true;
                 }
                 LookupResult::Asn { info, .. } => {
-                    assert!(info.unwrap().field(0).contains("15169"));
+                    let info = info.unwrap();
+                    assert!(info.field(0).contains("15169"));
+                    assert!(
+                        info.name.as_deref().unwrap_or("").contains("GOOGLE"),
+                        "{info:?}"
+                    );
                     got_asn = true;
                 }
             }

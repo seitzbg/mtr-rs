@@ -32,6 +32,11 @@ impl NameCache {
         ip.and_then(|ip| self.asn.get(&ip)).and_then(|o| o.as_ref())
     }
 
+    /// The AS name from the second Cymru lookup, when it is known.
+    pub fn asn_name(&self, ip: Option<IpAddr>) -> Option<&str> {
+        self.asn(ip).and_then(|i| i.name.as_deref())
+    }
+
     /// True when a PTR lookup should be issued for `ip` (first sighting).
     pub fn request_ptr(&mut self, ip: IpAddr) -> bool {
         !self.ptr.contains_key(&ip) && self.ptr_pending.insert(ip)
@@ -136,6 +141,17 @@ mod tests {
         });
         assert_eq!(c.asn(Some(ip("10.0.0.1"))).unwrap().field(0), "64500");
         assert_eq!(c.asn(None), None);
+    }
+
+    #[test]
+    fn the_cache_hands_out_the_as_name() {
+        let mut c = NameCache::default();
+        assert_eq!(c.asn_name(Some(ip("10.0.0.1"))), None);
+        let mut info = crate::asn::parse_txt("64500 | 192.0.2.0/24 | US | arin | 2000-01-01");
+        info.name = Some("EXAMPLE-AS, US".into());
+        c.insert_asn(ip("10.0.0.1"), info);
+        assert_eq!(c.asn_name(Some(ip("10.0.0.1"))), Some("EXAMPLE-AS, US"));
+        assert_eq!(c.asn_name(None), None);
     }
 
     #[test]

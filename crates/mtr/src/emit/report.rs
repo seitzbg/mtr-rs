@@ -9,21 +9,19 @@ use mtr_proto::MplsLabel;
 use crate::asn;
 use crate::emit::ReportContext;
 use crate::names::{addr_name, hop_name};
+use crate::width::{display_width, pad_right};
 
 /// `Start: <iso_time()>` — printed once before probing in `-r`/`-w` mode (report_open, utils.c:193-202).
 pub fn start_line(now: &jiff::Zoned) -> String {
     format!("Start: {}", now.strftime("%Y-%m-%dT%H:%M:%S%z"))
 }
 
-/// `snprintf(buf + len, …)`: overwrite `buf` from character offset `at` (padding if shorter).
+/// `snprintf(buf + len, …)`: overwrite `buf` from display-width offset `at` (padding if shorter).
 fn place(buf: &mut String, at: usize, s: &str) {
-    let cut = buf
-        .char_indices()
-        .nth(at)
-        .map(|(i, _)| i)
-        .unwrap_or(buf.len());
+    // truncate to display width `at`, then pad to `at`
+    let cut = crate::width::truncate_to(buf, at).len();
     buf.truncate(cut);
-    for _ in buf.chars().count()..at {
+    for _ in display_width(buf)..at {
         buf.push(' ');
     }
     buf.push_str(s);
@@ -57,9 +55,9 @@ pub fn render(ctx: &ReportContext<'_>) -> String {
     let mut len_hosts: usize = 33;
     let mut stat_start: usize = 33;
     if ctx.wide {
-        len_hosts = ctx.local_hostname.chars().count();
+        len_hosts = display_width(ctx.local_hostname);
         for n in &names {
-            len_hosts = len_hosts.max(n.chars().count());
+            len_hosts = len_hosts.max(display_width(n));
         }
     }
     let mut len_tmp = len_hosts;
@@ -73,9 +71,9 @@ pub fn render(ctx: &ReportContext<'_>) -> String {
 
     let mut out = String::new();
     // Header (report.c:206-217): titles are written at `stat_start`, overwriting the padding.
-    let mut buf = format!("HOST: {:<w$}", ctx.local_hostname, w = len_tmp);
+    let mut buf = format!("HOST: {}", pad_right(ctx.local_hostname, len_tmp));
     let mut len = if ctx.wide {
-        buf.chars().count()
+        display_width(&buf)
     } else {
         stat_start
     };
@@ -92,17 +90,16 @@ pub fn render(ctx: &ReportContext<'_>) -> String {
         let name = &names[i];
         let mut buf = if ipinfo {
             format!(
-                " {:>2}. {}{:<w$}",
+                " {:>2}. {}{}",
                 at + 1,
                 asn::format_selected(ctx.names.asn(hop.addr), &cfg.ipinfo_fields),
-                name,
-                w = len_hosts
+                pad_right(name, len_hosts)
             )
         } else {
-            format!(" {:>2}.|-- {:<w$}", at + 1, name, w = len_hosts)
+            format!(" {:>2}.|-- {}", at + 1, pad_right(name, len_hosts))
         };
         let mut len = if ctx.wide {
-            buf.chars().count()
+            display_width(&buf)
         } else {
             stat_start
         };
@@ -143,7 +140,7 @@ fn extra_row(
             name
         );
     } else {
-        let _ = writeln!(out, "        {:<w$}", name, w = len_hosts);
+        let _ = writeln!(out, "        {}", pad_right(&name, len_hosts));
     }
     if cfg.mpls {
         mpls_lines(out, &a.mpls);

@@ -4,6 +4,8 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
+use mtr_proto::{MplsLabel, ProbeResult};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sample {
     /// Probe sent, no answer yet (C `saved[] == -1`).
@@ -14,10 +16,22 @@ pub enum Sample {
     Lost,
 }
 
+/// One probe's full detail, for the TUI Log tab (spec §8 item 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryEntry {
+    /// The hop's 1-based send counter (`saved_seq`).
+    pub seq: u32,
+    pub sent: Instant,
+    pub sample: Sample,
+    /// What the helper answered; `None` while pending or after `no-reply`.
+    pub result: Option<ProbeResult>,
+    pub mpls: Vec<MplsLabel>,
+}
+
 /// Ring of the most recent probes of one hop, indexed by the hop's 1-based send counter.
 #[derive(Debug, Clone)]
 pub struct History {
-    samples: VecDeque<Sample>,
+    samples: VecDeque<HistoryEntry>,
     /// Send counter (`saved_seq`) of `samples[0]`.
     base_seq: u32,
     capacity: usize,
@@ -46,7 +60,13 @@ impl History {
             self.samples.pop_front();
             self.base_seq += 1;
         }
-        self.samples.push_back(Sample::Pending { sent: now });
+        self.samples.push_back(HistoryEntry {
+            seq: saved_seq,
+            sent: now,
+            sample: Sample::Pending { sent: now },
+            result: None,
+            mpls: Vec::new(),
+        });
     }
 
     fn index(&self, saved_seq: u32) -> Option<usize> {
@@ -58,12 +78,31 @@ impl History {
 
     /// Overwrite the sample for `saved_seq`; ignored when it has been evicted.
     pub fn record(&mut self, saved_seq: u32, sample: Sample) {
+        self.record_outcome(saved_seq, sample, None, &[]);
+    }
+
+    /// `record()` plus the helper's result and any MPLS labels.
+    pub fn record_outcome(
+        &mut self,
+        saved_seq: u32,
+        sample: Sample,
+        result: Option<ProbeResult>,
+        mpls: &[MplsLabel],
+    ) {
         if let Some(i) = self.index(saved_seq) {
-            self.samples[i] = sample;
+            let e = &mut self.samples[i];
+            e.sample = sample;
+            e.result = result;
+            e.mpls = mpls.to_vec();
         }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Sample> {
+        self.samples.iter().map(|e| &e.sample)
+    }
+
+    /// All entries, oldest first, with seq/sent/result/MPLS detail (TUI Log tab).
+    pub fn entries(&self) -> impl DoubleEndedIterator<Item = &HistoryEntry> {
         self.samples.iter()
     }
 
@@ -76,6 +115,10 @@ impl History {
     }
 
     pub fn latest(&self) -> Option<&Sample> {
+        self.samples.back().map(|e| &e.sample)
+    }
+
+    pub fn latest_entry(&self) -> Option<&HistoryEntry> {
         self.samples.back()
     }
 
@@ -126,6 +169,37 @@ mod tests {
                 },
                 Sample::Rtt(3)
             ]
+        );
+    }
+
+    #[test]
+    fn entries_expose_seq_sent_result_and_mpls() {
+        use mtr_proto::{MplsLabel, ProbeResult};
+        let t = Instant::now();
+        let mut h = History::new(4);
+        h.push_sent(1, t);
+        h.push_sent(2, t + Duration::from_secs(1));
+        let lbl = MplsLabel {
+            label: 100,
+            tc: 1,
+            bottom_of_stack: true,
+            ttl: 64,
+        };
+        h.record_outcome(1, Sample::Rtt(700), Some(ProbeResult::TtlExpired), &[lbl]); // MplsLabel is Copy
+        h.record(2, Sample::Lost);
+        let e: Vec<&HistoryEntry> = h.entries().collect();
+        assert_eq!((e[0].seq, e[0].sent, e[0].sample), (1, t, Sample::Rtt(700)));
+        assert_eq!(e[0].result, Some(ProbeResult::TtlExpired));
+        assert_eq!(e[0].mpls, vec![lbl]);
+        assert_eq!(
+            (e[1].seq, e[1].sample, e[1].result),
+            (2, Sample::Lost, None)
+        );
+        assert_eq!(h.latest_entry().unwrap().seq, 2);
+        assert_eq!(h.entries().next_back().unwrap().seq, 2);
+        assert_eq!(
+            h.iter().copied().collect::<Vec<_>>(),
+            vec![Sample::Rtt(700), Sample::Lost]
         );
     }
 

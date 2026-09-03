@@ -4,7 +4,9 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
-use clap::{ArgAction, Parser};
+use clap::{
+    ArgAction, ArgMatches, CommandFactory as _, FromArgMatches as _, Parser, parser::ValueSource,
+};
 use mtr_core::{Config, MAX_PACKET, MIN_PACKET, fields};
 use mtr_proto::Protocol;
 
@@ -54,6 +56,17 @@ pub fn parse_c_long(s: &str) -> Result<i64, String> {
     }
     let v = i64::from_str_radix(digits, radix).map_err(|_| err())?;
     Ok(if neg { -v } else { v })
+}
+
+/// Shared by the CLI's `-s` and the TUI's PacketSize prompt: `n.abs()` panics/wraps for
+/// `i64::MIN`, so use `unsigned_abs()` — which handles the full `i64` range, including
+/// `i64::MIN` — for the magnitude comparison instead.
+pub fn packet_size_in_range(n: i64) -> Result<(), String> {
+    let mag = n.unsigned_abs();
+    if mag < u64::from(MIN_PACKET.unsigned_abs()) || mag > u64::from(MAX_PACKET.unsigned_abs()) {
+        return Err(format!("value out of range ({MIN_PACKET} - {MAX_PACKET})"));
+    }
+    Ok(())
 }
 
 fn parse_port(s: &str) -> Result<u16, String> {
@@ -293,6 +306,26 @@ pub struct Args {
     /// Target hosts (HOSTNAME[:PORT] with -u/-T/-S)
     #[arg(value_name = "HOSTNAME")]
     pub hosts: Vec<String>,
+    /// Output mode by last-flag-wins order (mtr.c:624-660); set by [`Args::parse_argv`].
+    #[arg(skip)]
+    pub mode: Option<OutputMode>,
+}
+
+/// The mode flags in `argv` order; the one that appears last wins, as each `case` in
+/// ui/mtr.c:624-660 overwrites `ctl->DisplayMode`. Returns `None` when no mode flag was given.
+pub fn output_mode(m: &ArgMatches) -> Option<OutputMode> {
+    [
+        ("report", OutputMode::Report),
+        ("report_wide", OutputMode::Report),
+        ("curses", OutputMode::Tui),
+        ("csv", OutputMode::Csv),
+        ("json", OutputMode::Json),
+    ]
+    .into_iter()
+    .filter(|(id, _)| m.value_source(id) == Some(ValueSource::CommandLine))
+    .filter_map(|(id, mode)| m.index_of(id).map(|i| (i, mode)))
+    .max_by_key(|(i, _)| *i)
+    .map(|(_, mode)| mode)
 }
 
 #[derive(Debug, Clone)]
@@ -311,9 +344,17 @@ pub struct Options {
 }
 
 impl Args {
+    /// Parse `argv` (including `argv[0]`) and record the last-wins output mode.
+    pub fn parse_argv(argv: Vec<String>) -> Result<Args, clap::Error> {
+        let matches = Args::command().try_get_matches_from(argv)?;
+        let mut args = Args::from_arg_matches(&matches)?;
+        args.mode = output_mode(&matches);
+        Ok(args)
+    }
+
     /// Validation in the order of ui/mtr.c, producing its error texts (exit code 1 in `main`).
     pub fn into_options(self, is_root: bool) -> Result<Options, String> {
-        let mode = if self.json {
+        let mode = self.mode.unwrap_or(if self.json {
             OutputMode::Json
         } else if self.csv {
             OutputMode::Csv
@@ -321,7 +362,7 @@ impl Args {
             OutputMode::Report
         } else {
             OutputMode::Tui
-        };
+        });
         let protocol = match (self.udp, self.tcp, self.sctp) {
             (false, false, false) => Protocol::Icmp,
             (true, false, false) => Protocol::Udp,
@@ -335,9 +376,7 @@ impl Args {
             (false, true) => AddressFamily::V6,
             (false, false) => AddressFamily::Unspec,
         };
-        if self.psize.abs() < i64::from(MIN_PACKET) || self.psize.abs() > i64::from(MAX_PACKET) {
-            return Err(format!("value out of range ({MIN_PACKET} - {MAX_PACKET})"));
-        }
+        packet_size_in_range(self.psize)?;
         if !(-1..=255).contains(&self.bitpattern) {
             return Err(format!(
                 "value out of range (-1 - 255): {}",
@@ -577,14 +616,30 @@ mod tests {
         assert!(o.config.interactive);
     }
 
+    fn opts_argv(args: &[&str]) -> Options {
+        let argv: Vec<String> = std::iter::once("mtr")
+            .chain(args.iter().copied())
+            .map(String::from)
+            .collect();
+        Args::parse_argv(argv).unwrap().into_options(false).unwrap()
+    }
+
     #[test]
     fn output_modes_and_precedence() {
-        assert_eq!(opts(&["h"]).unwrap().mode, OutputMode::Tui);
-        assert_eq!(opts(&["-t", "h"]).unwrap().mode, OutputMode::Tui);
-        assert_eq!(opts(&["-w", "h"]).unwrap().mode, OutputMode::Report);
-        let o = opts(&["-w", "-C", "h"]).unwrap();
-        assert_eq!((o.mode, o.report_wide), (OutputMode::Csv, true));
-        assert_eq!(opts(&["-r", "-j", "h"]).unwrap().mode, OutputMode::Json);
+        assert_eq!(opts_argv(&["h"]).mode, OutputMode::Tui);
+        assert_eq!(opts_argv(&["-t", "h"]).mode, OutputMode::Tui);
+        assert_eq!(opts_argv(&["-w", "h"]).mode, OutputMode::Report);
+        // mtr.c:624-660: the last mode flag on the command line wins (deviation 11)
+        assert_eq!(opts_argv(&["-r", "-t", "h"]).mode, OutputMode::Tui);
+        assert_eq!(opts_argv(&["-t", "-r", "h"]).mode, OutputMode::Report);
+        assert_eq!(opts_argv(&["-j", "-C", "h"]).mode, OutputMode::Csv);
+        assert_eq!(opts_argv(&["-C", "-j", "h"]).mode, OutputMode::Json);
+        assert_eq!(opts_argv(&["-w", "-C", "h"]).mode, OutputMode::Csv);
+        let o = opts_argv(&["-w", "-t", "h"]);
+        assert_eq!((o.mode, o.report_wide), (OutputMode::Tui, true));
+        assert!(o.config.interactive);
+        let o = opts_argv(&["-r", "-c", "3", "h"]);
+        assert!(!o.config.interactive && o.config.force_max_ping);
     }
 
     #[test]
@@ -861,6 +916,26 @@ mod tests {
             opts(&["-s", "-100", "-B", "-1", "h"])
                 .map(|o| (o.config.packet_size, o.config.bit_pattern)),
             Ok((-100, -1))
+        );
+    }
+
+    #[test]
+    fn packet_size_i64_min_does_not_panic_on_abs() {
+        // `-s`'s value_parser is `parse_c_long`, which parses the digits as a positive i64
+        // before negating, so it already rejects a magnitude of 2^63 (clap surfaces this as a
+        // parse error) and never hands `into_options` an actual `i64::MIN` through the CLI —
+        // but this is still an end-to-end proof that the extreme value errors cleanly instead
+        // of panicking.
+        assert!(
+            Args::try_parse_from(["mtr", "-s", "-9223372036854775808", "h"]).is_err(),
+            "clap rejects the value at parse time, not a panic"
+        );
+        // The real regression test for the `n.abs()` overflow fix: `i64::MIN` itself, which
+        // `n.abs()` cannot represent and would have panicked (debug) or silently misbehaved
+        // (release) on.
+        assert_eq!(
+            packet_size_in_range(i64::MIN),
+            Err("value out of range (28 - 65535)".to_string())
         );
     }
 }
