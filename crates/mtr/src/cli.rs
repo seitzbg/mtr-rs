@@ -125,8 +125,7 @@ pub fn parse_ipinfo_fields(spec: &str) -> Result<Vec<u8>, String> {
     name = "mtr",
     about = "mtr - a network diagnostic tool (Rust port)",
     disable_version_flag = true,
-    args_override_self = true,
-    allow_hyphen_values = true
+    args_override_self = true
 )]
 pub struct Args {
     /// Print version (twice for the feature list)
@@ -204,19 +203,30 @@ pub struct Args {
         short = 's',
         long = "psize",
         value_name = "PACKETSIZE",
-        default_value = "64"
+        value_parser = parse_c_long,
+        default_value = "64",
+        allow_hyphen_values = true
     )]
-    pub psize: String,
+    pub psize: i64,
     /// Payload byte (-1: random)
     #[arg(
         short = 'B',
         long = "bitpattern",
         value_name = "NUM",
-        default_value = "0"
+        value_parser = parse_c_long,
+        default_value = "0",
+        allow_hyphen_values = true
     )]
-    pub bitpattern: String,
+    pub bitpattern: i64,
     /// Type of service field
-    #[arg(short = 'Q', long = "tos", value_name = "NUM", value_parser = parse_c_long, default_value = "0")]
+    #[arg(
+        short = 'Q',
+        long = "tos",
+        value_name = "NUM",
+        value_parser = parse_c_long,
+        default_value = "0",
+        allow_hyphen_values = true
+    )]
     pub tos: i64,
     /// Display MPLS labels from ICMP extensions
     #[arg(short = 'e', long = "mpls")]
@@ -325,13 +335,14 @@ impl Args {
             (false, true) => AddressFamily::V6,
             (false, false) => AddressFamily::Unspec,
         };
-        let psize = parse_c_long(&self.psize)?;
-        let bitpattern = parse_c_long(&self.bitpattern)?;
-        if psize.abs() < i64::from(MIN_PACKET) || psize.abs() > i64::from(MAX_PACKET) {
+        if self.psize.abs() < i64::from(MIN_PACKET) || self.psize.abs() > i64::from(MAX_PACKET) {
             return Err(format!("value out of range ({MIN_PACKET} - {MAX_PACKET})"));
         }
-        if !(-1..=255).contains(&bitpattern) {
-            return Err(format!("value out of range (-1 - 255): {}", bitpattern));
+        if !(-1..=255).contains(&self.bitpattern) {
+            return Err(format!(
+                "value out of range (-1 - 255): {}",
+                self.bitpattern
+            ));
         }
         if !(0..=255).contains(&self.tos) {
             return Err(format!("value out of range (0 - 255): {}", self.tos));
@@ -431,8 +442,8 @@ impl Args {
             max_ping: self.report_cycles.map(|c| c.max(0) as u32).unwrap_or(10),
             interactive: mode == OutputMode::Tui,
             force_max_ping: self.report_cycles.is_some(),
-            packet_size: psize as i32,
-            bit_pattern: bitpattern as i32,
+            packet_size: self.psize as i32,
+            bit_pattern: self.bitpattern as i32,
             tos: self.tos as u8,
             mark: self.mark.map(|m| m as u32).unwrap_or(0),
             first_ttl: first_ttl as u8,
@@ -827,5 +838,29 @@ mod tests {
         );
         assert!(version_text(2).contains("  ipv6     yes\n"));
         assert!(version_text(2).contains("  curses   no\n"));
+    }
+
+    #[test]
+    fn unknown_options_are_rejected_and_flags_after_the_host_still_count() {
+        assert!(Args::try_parse_from(["mtr", "--frobnicate", "host"]).is_err());
+        assert!(Args::try_parse_from(["mtr", "-Q9x", "host"]).is_err());
+        let a = parse(&["host", "-r"]);
+        assert!(a.report);
+        assert_eq!(a.hosts, ["host"]);
+        let a = parse(&["host1", "host2", "-c", "3"]);
+        assert_eq!((a.hosts.len(), a.report_cycles), (2, Some(3)));
+    }
+
+    #[test]
+    fn option_values_do_not_swallow_flags_but_negative_numbers_parse() {
+        assert!(Args::try_parse_from(["mtr", "-o", "-r", "host"]).is_err());
+        assert!(Args::try_parse_from(["mtr", "-c", "-r", "host"]).is_err());
+        assert_eq!(parse(&["-s", "-100", "host"]).psize, -100);
+        assert_eq!(parse(&["-B", "-1", "host"]).bitpattern, -1);
+        assert_eq!(
+            opts(&["-s", "-100", "-B", "-1", "h"])
+                .map(|o| (o.config.packet_size, o.config.bit_pattern)),
+            Ok((-100, -1))
+        );
     }
 }
