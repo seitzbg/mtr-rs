@@ -437,7 +437,7 @@ mod tests {
         assert!(r2.starts_with("   2. ???"), "{r2:?}");
         assert!(r2.contains("100.00%     2    0.0"), "{r2:?}");
         assert!(
-            !r2.contains('×'),
+            !r2.contains('•'),
             "a hop that never answered has a blank sparkline, not lost marks: {r2:?}"
         );
         let r3 = row_text(&buf, 3);
@@ -521,7 +521,7 @@ mod tests {
         let r1 = row_text(&buf, 1);
         let x = r1
             .chars()
-            .position(|c| c == '×')
+            .position(|c| c == '•')
             .unwrap_or_else(|| panic!("no lost mark in {r1:?}")) as u16;
         let cell = buf.cell((x, 1)).unwrap();
         assert_eq!(cell.fg, Color::Red, "{r1:?}");

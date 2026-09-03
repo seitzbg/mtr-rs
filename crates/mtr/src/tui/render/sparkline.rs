@@ -180,7 +180,7 @@ mod tests {
             "only the newest `width` samples"
         );
         assert_eq!(glyph(&Cell::Rtt(7, 8000), &UNICODE), "█");
-        assert_eq!(glyph(&Cell::Lost, &UNICODE), "×");
+        assert_eq!(glyph(&Cell::Lost, &UNICODE), "•");
         assert_eq!(glyph(&Cell::Lost, &ASCII), "x");
         assert_eq!(glyph(&Cell::Pending, &ASCII), " ");
     }

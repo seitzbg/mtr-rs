@@ -180,7 +180,7 @@ fn render_rtt(view: &View, hop: &Hop, inner: Rect, buf: &mut Buffer) {
         if *lost {
             let x = x0 + c as u16;
             if x < loss_area.x + loss_area.width {
-                buf.set_string(x, loss_area.y, view.glyphs.lost_mark, pal.loss(100_000));
+                buf.set_string(x, loss_area.y, view.glyphs.lost_mark, pal.lost_sample());
             }
         }
     }
