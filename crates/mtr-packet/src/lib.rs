@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod backend;
+pub mod command;
 pub mod probe_table;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
