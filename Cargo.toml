@@ -24,3 +24,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 proptest = "1"
 unicode-width = "0.2"
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures = "0.3"
+insta = "1"

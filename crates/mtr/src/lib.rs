@@ -11,6 +11,7 @@ pub mod names;
 pub mod options;
 pub mod resolver;
 pub mod target;
+pub mod tui;
 pub mod width;
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
