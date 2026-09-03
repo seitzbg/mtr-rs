@@ -1064,4 +1064,132 @@ mod tests {
             Err(e) => assert_eq!(e.raw_os_error(), Some(nix::libc::ECONNREFUSED)),
         }
     }
+
+    /// MILESTONE 3 (Task 15): the labels `decode_mpls()` lifted out of the RFC 4950 extension
+    /// have to survive `deliver()` -> `respond()` -> `Response::encode()` and appear as the
+    /// `mpls` argument of the `ttl-expired` line (probe.c:250-320 formats the reply, the
+    /// `mpls` key coming from `format_mpls_string()` at probe.c:212-244).
+    #[test]
+    fn mpls_labels_reach_the_reply_line() {
+        let Some(b) = backend(4) else { return };
+        let mut t = ProbeTable::new();
+        let i = t.alloc(7, Instant::now(), 10).unwrap();
+        t.probes[i].sequence = 33435;
+        t.probes[i].remote = "8.8.8.8:0".parse().unwrap();
+        t.probes[i].local = "10.0.0.2:0".parse().unwrap();
+        let parsed = deconstruct::Parsed {
+            kind: deconstruct::IcmpKind::TimeExceeded,
+            echo: None,
+            inner: Some(deconstruct::Inner::Icmp {
+                id: b.icmp_id,
+                sequence: 33435,
+            }),
+            mpls: vec![mtr_proto::MplsLabel {
+                label: 16,
+                tc: 0,
+                bottom_of_stack: true,
+                ttl: 255,
+            }],
+        };
+        let mut out = Vec::new();
+        b.deliver(
+            &mut t,
+            &parsed,
+            4,
+            "10.0.0.1".parse().unwrap(),
+            Instant::now(),
+            &mut out,
+        );
+        assert_eq!(out.len(), 1);
+        let line = out[0].encode();
+        assert!(
+            line.starts_with("7 ttl-expired ip-4 10.0.0.1 round-trip-time "),
+            "{line}"
+        );
+        assert!(line.trim_end().ends_with(" mpls 16,0,1,255"), "{line}");
+        assert!(t.is_empty());
+    }
+
+    /// The same path starting from bytes: a synthetic ICMPv4 time-exceeded quoting our own echo
+    /// and carrying an RFC 4884/4950 extension (the Task 9 fixture shape) goes through
+    /// `parse_icmp4()` and comes out as one wire line. Also pins `MAX_MPLS_LABELS`
+    /// (deconstruct_unix.c:28) on the wire: a 10-label object yields 8 groups, and a reply with
+    /// no extension has no `mpls` key at all.
+    #[test]
+    fn synthetic_time_exceeded_bytes_produce_an_mpls_reply_line() {
+        let Some(b) = backend(4) else { return };
+        // ICMP time-exceeded header + the 128-byte quoted original datagram.
+        let quoted = |id: u16| {
+            let mut icmp = vec![11u8, 0, 0, 0, 0, 0, 0, 0];
+            let mut inner = vec![
+                0x45u8, 0, 0, 28, 0, 0, 0, 0, 64, 1, /* IPPROTO_ICMP */
+                0, 0,
+            ];
+            inner.extend_from_slice(&[10, 0, 0, 2]);
+            inner.extend_from_slice(&[8, 8, 8, 8]);
+            inner.extend_from_slice(&[8, 0, 0, 0]);
+            inner.extend_from_slice(&id.to_be_bytes());
+            inner.extend_from_slice(&33435u16.to_be_bytes());
+            inner.resize(128, 0);
+            icmp.extend(inner);
+            icmp
+        };
+        let with_labels = |n: u8| {
+            let mut icmp = quoted(b.icmp_id);
+            icmp.extend_from_slice(&[0x20, 0, 0, 0]); // extension header, version 2
+            icmp.extend_from_slice(&[0, 4 + 4 * n, 1, 1]); // length, class 1 (MPLS), ctype 1
+            for i in 0..n {
+                // label 16 + i, tc 0, bottom-of-stack, ttl 255
+                icmp.extend_from_slice(&[0x00, 0x01, 0x01 | (i << 4), 0xff]);
+            }
+            icmp
+        };
+        let encode = |icmp: &[u8]| {
+            let mut t = ProbeTable::new();
+            let i = t.alloc(7, Instant::now(), 10).unwrap();
+            t.probes[i].sequence = 33435;
+            t.probes[i].remote = "8.8.8.8:0".parse().unwrap();
+            t.probes[i].local = "10.0.0.2:0".parse().unwrap();
+            let parsed = parse_icmp4(icmp, false).unwrap();
+            let mut out = Vec::new();
+            b.deliver(
+                &mut t,
+                &parsed,
+                4,
+                "10.0.0.1".parse().unwrap(),
+                Instant::now(),
+                &mut out,
+            );
+            assert_eq!(out.len(), 1, "{out:?}");
+            out[0].encode()
+        };
+
+        let line = encode(&with_labels(2));
+        assert!(
+            line.starts_with("7 ttl-expired ip-4 10.0.0.1 round-trip-time "),
+            "{line}"
+        );
+        assert!(
+            line.trim_end().ends_with(" mpls 16,0,1,255,17,0,1,255"),
+            "{line}"
+        );
+
+        // MAX_MPLS_LABELS is 8, so a 10-label stack still puts exactly 8 groups on the wire.
+        let capped = encode(&with_labels(10));
+        let list = capped.split(" mpls ").nth(1).unwrap().trim_end();
+        assert_eq!(
+            list.split(',').count(),
+            4 * deconstruct::MAX_MPLS_LABELS,
+            "{capped}"
+        );
+
+        // No extension: no `mpls` key (Response::encode only appends it when labels exist,
+        // as probe.c:299-303 does).
+        let bare = encode(&quoted(b.icmp_id));
+        assert!(
+            bare.starts_with("7 ttl-expired ip-4 10.0.0.1 round-trip-time "),
+            "{bare}"
+        );
+        assert!(!bare.contains(" mpls "), "{bare}");
+    }
 }
