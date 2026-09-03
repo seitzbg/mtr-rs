@@ -9,9 +9,8 @@ use mtr_proto::{CProbeParams, Protocol, Response, ResponseKind};
 
 use crate::probe_table::ProbeTable;
 
-// Task 3 enables: needs the real ProbeTable (this commit's is a placeholder).
-// #[cfg(test)]
-// pub mod fake;
+#[cfg(test)]
+pub mod fake;
 // `linux` arrives in Task 7 (LinuxBackend); until then this line would fail to build natively
 // on Linux since the module doesn't exist yet.
 #[cfg(target_os = "macos")]
