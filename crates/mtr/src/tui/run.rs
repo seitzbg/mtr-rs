@@ -54,7 +54,9 @@ where
 {
     let mut ui = UiState::new();
     let mut dirty = true;
-    let mut last_frame = Instant::now() - FRAME_MIN_GAP;
+    let mut last_frame = Instant::now()
+        .checked_sub(FRAME_MIN_GAP)
+        .unwrap_or_else(Instant::now);
     let mut clock = tokio::time::interval(CLOCK_TICK);
     let mut ctrl_c = std::pin::pin!(tokio::signal::ctrl_c());
     let version = env!("CARGO_PKG_VERSION");

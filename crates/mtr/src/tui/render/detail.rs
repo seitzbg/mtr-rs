@@ -129,7 +129,8 @@ pub fn render(view: &View, area: Rect, buf: &mut Buffer) {
     .highlight_style(pal.header())
     .render(tabs_area, buf);
     if !range.contains(&view.ui.selected) {
-        buf.set_string(inner.x, inner.y, "waiting for the first reply…", pal.dim());
+        let msg = format!("waiting for the first reply{}", g.ellipsis);
+        buf.set_string(inner.x, inner.y, &msg, pal.dim());
         return;
     }
     let hop = &view.engine.hops()[view.ui.selected];

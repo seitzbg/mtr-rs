@@ -15,7 +15,7 @@ use crate::width::{display_width, pad_right, truncate_to};
 
 pub const HOST_MIN: usize = 20;
 pub const SPARK_MIN: usize = 8;
-/// `"▶ "` + `"%2d. "` = 6 cells.
+/// Row prefix: 1 cell of selection marker + `"{:>3}."` + one space = 6 cells.
 const NUM_WIDTH: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

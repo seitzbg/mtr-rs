@@ -55,6 +55,9 @@ pub async fn run_from_env() -> i32 {
     }
 }
 
+/// The TUI panic hook is process-wide; installing it per target would nest hooks.
+static PANIC_HOOK: std::sync::Once = std::sync::Once::new();
+
 enum Fatal {
     /// Skip this target, continue with the next one, exit 1 at the end (C: resolution failures).
     Skip(String),
@@ -201,9 +204,11 @@ async fn run_target(
     let interrupted = {
         let mut driver = Driver::new(&mut engine, &mut helper, resolver.as_mut(), &mut names);
         let outcome = if opts.mode == OutputMode::Tui {
-            tui::terminal::install_panic_hook();
             let guard =
                 tui::terminal::enter().map_err(|e| Fatal::Abort(format!("terminal: {e}")))?;
+            // Only once, and only with a live Guard: the hook restores the terminal, which is a
+            // no-op at best and stray escape bytes at worst when no TUI is running.
+            PANIC_HOOK.call_once(tui::terminal::install_panic_hook);
             let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
             let mut term = ratatui::Terminal::new(backend)
                 .map_err(|e| Fatal::Abort(format!("terminal: {e}")))?;

@@ -1,4 +1,5 @@
-//! Colour depth ladder and the semantic styles of the TUI (spec §8). GPL-2.0-only.
+//! Colour depth ladder and the semantic styles of the TUI (spec §8).
+//! Ported from ui/curses.c (mtr 0.96, commit 7b01773). GPL-2.0-only.
 
 use ratatui::style::{Color, Modifier, Style};
 

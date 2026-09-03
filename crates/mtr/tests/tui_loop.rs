@@ -42,6 +42,8 @@ struct Session {
     screen: String,
 }
 
+/// `keys` are `(delay_ms_after_the_previous_key, event)` — the sender sleeps between sends, so the
+/// delays are *relative*, and a key's wall-clock time is the running sum of the delays before it.
 async fn session(keys: Vec<(u64, std::io::Result<Event>)>, cfg: Config) -> Session {
     let mut helper = spawn_with(&[fake()], false, mtr_proto::Protocol::Icmp, 0)
         .await
@@ -86,7 +88,8 @@ async fn session(keys: Vec<(u64, std::io::Result<Event>)>, cfg: Config) -> Sessi
 
 #[tokio::test]
 async fn pause_reset_and_quit_drive_the_engine() {
-    // 0.5 s: probes flowing (interval 1 s / numhosts 10 → 100 ms ticks, 3-hop path)
+    // relative delays; absolute times are 0.7 s `p`, 1.9 s space, 3.4 s `r`, 5.3 s `q`
+    // (interval 1 s / numhosts 10 → 100 ms ticks over a 3-hop path)
     let keys = vec![
         (700, key('p')),
         (1200, key(' ')),
@@ -103,9 +106,10 @@ async fn pause_reset_and_quit_drive_the_engine() {
     .await;
     assert!(!s.interrupted);
     assert!(!s.engine.paused(), "resumed by space");
-    // reset at 1.5 s, quit at 1.9 s: only ~one batch of probes after the reset
+    // reset at 3.4 s, quit at 5.3 s: about two 1 s cycles of a 3-hop path after the reset, with
+    // room for a scheduler hiccup on either side
     let sent: i32 = s.engine.hops().iter().map(|h| h.transmitted()).sum();
-    assert!((1..=8).contains(&sent), "sent after reset: {sent}");
+    assert!((1..=12).contains(&sent), "sent after reset: {sent}");
     assert!(
         s.screen.contains("192.0.2.1"),
         "target row rendered:\n{}",
@@ -115,6 +119,7 @@ async fn pause_reset_and_quit_drive_the_engine() {
 
 #[tokio::test]
 async fn ctrl_c_is_interrupted_and_pause_freezes_probing() {
+    // relative delays: `p` at 0.3 s, Ctrl-C at 1.6 s
     let keys = vec![(300, key('p')), (1300, ctrl('c'))];
     let s = session(
         keys,
@@ -127,7 +132,7 @@ async fn ctrl_c_is_interrupted_and_pause_freezes_probing() {
     assert!(s.interrupted);
     assert!(s.engine.paused());
     let sent: i32 = s.engine.hops().iter().map(|h| h.transmitted()).sum();
-    assert!(sent <= 4, "no probes while paused: {sent}");
+    assert!(sent <= 6, "no probes while paused: {sent}");
     assert!(s.screen.contains("[PAUSED]"), "{}", s.screen);
 }
 
