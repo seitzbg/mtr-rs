@@ -258,8 +258,7 @@ async fn run_target(
                 .unwrap_or(0);
             print!("{}", emit::csv::render(&ctx, now));
         }
-        // Task 15 prints the `--report-on-exit` report here.
-        OutputMode::Tui => {}
+        OutputMode::Tui => print!("{}", emit::report_on_exit_text(&ctx, opts.report_on_exit)),
     }
     Ok(if interrupted {
         TargetOutcome::Interrupted

@@ -439,3 +439,19 @@ fn wide_report_pads_by_display_width_not_chars() {
         .collect();
     assert!(cols.iter().all(|c| *c == cols[0]), "{out}");
 }
+
+#[test]
+fn report_on_exit_text_is_the_plain_report_without_a_start_line() {
+    let e = finished_engine(base_cfg());
+    let names = NameCache::default();
+    let c = ctx(&e, &names, false);
+    assert_eq!(
+        mtr::emit::report_on_exit_text(&c, false),
+        "",
+        "flag off prints nothing"
+    );
+    let out = mtr::emit::report_on_exit_text(&c, true);
+    assert_eq!(out, report::render(&c));
+    assert!(out.starts_with("HOST: "), "{out}");
+    assert!(!out.contains("Start: "), "report_close() only: {out}");
+}
