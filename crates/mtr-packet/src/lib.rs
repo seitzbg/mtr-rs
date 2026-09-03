@@ -26,8 +26,24 @@ pub enum Fatal {
     Io(String, std::io::Error),
 }
 
+/// packet.c:104-125: open sockets privileged, drop privileges, finish init, serve stdin.
 pub fn run() -> Result<(), Fatal> {
-    Err(Fatal::Message("not implemented".into()))
+    use std::os::fd::AsFd;
+    #[cfg(target_os = "linux")]
+    let mut backend = backend::linux::LinuxBackend::open_privileged()?;
+    #[cfg(target_os = "macos")]
+    let mut backend = backend::macos::MacosBackend::open_privileged()?;
+    privs::drop_all()?;
+    backend
+        .finish_init()
+        .map_err(|e| Fatal::Io("socket setup".into(), e))?;
+    let stdin = std::io::stdin();
+    set_nonblocking(stdin.as_fd())
+        .map_err(|e| Fatal::Message(format!("Unexpected command stream error: {e}")))?;
+    let mut helper = command::Helper::new(backend);
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+    serve(&mut helper, stdin.as_fd(), &mut out)
 }
 
 /// `init_command_buffer()` / `set_socket_nonblocking()`: add `O_NONBLOCK`.

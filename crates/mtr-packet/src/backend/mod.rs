@@ -11,8 +11,8 @@ use crate::probe_table::ProbeTable;
 
 #[cfg(test)]
 pub mod fake;
-// `linux` arrives in Task 7 (LinuxBackend); until then this line would fail to build natively
-// on Linux since the module doesn't exist yet.
+#[cfg(target_os = "linux")]
+pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
