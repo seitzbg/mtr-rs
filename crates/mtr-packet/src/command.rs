@@ -152,7 +152,15 @@ impl<B: ProbeBackend> Helper<B> {
         self.table.probes[idx].protocol = params.protocol;
         match self.backend.send_probe(&mut self.table, idx, &params) {
             Ok(()) => {}
-            Err(e) if e.raw_os_error() == Some(nix::libc::ECONNREFUSED) => {
+            // Only a *stream* construct maps ECONNREFUSED to a reply: C reaches that branch
+            // through `construct_packet() < 0` (probe_unix.c:613-620), which for ICMP and UDP
+            // only fails before any send. A datagram `sendto()` that fails with ECONNREFUSED
+            // is a `send_packet()` failure and goes to report_packet_error(), which has no
+            // ECONNREFUSED case — so it prints `unexpected-error errno 111`.
+            Err(e)
+                if e.raw_os_error() == Some(nix::libc::ECONNREFUSED)
+                    && matches!(params.protocol, Protocol::Tcp | Protocol::Sctp) =>
+            {
                 // A refused stream connect means the destination was reached (probe_unix.c:617-619).
                 let p = self.table.remove(idx);
                 out.push(Response {
@@ -337,6 +345,42 @@ mod tests {
             } => assert_eq!(addr, "127.0.0.1".parse::<std::net::IpAddr>().unwrap()),
             other => panic!("{other:?}"),
         }
+        assert!(h.table.is_empty());
+    }
+
+    /// Only the *stream* construct maps ECONNREFUSED to a reply (probe_unix.c:613-620). A
+    /// datagram `sendto()` that fails with ECONNREFUSED goes through report_packet_error(),
+    /// which has no ECONNREFUSED case, so C prints `unexpected-error errno 111`.
+    #[test]
+    fn econnrefused_is_only_a_reply_on_the_stream_path() {
+        let mut h = helper();
+        h.backend.fail_with = Some(nix::libc::ECONNREFUSED);
+        for line in [
+            "11 send-probe ip-4 127.0.0.1",
+            "12 send-probe ip-4 127.0.0.1 protocol icmp",
+            "13 send-probe ip-4 127.0.0.1 protocol udp port 164",
+        ] {
+            assert_eq!(
+                one(&mut h, line).kind,
+                ResponseKind::UnexpectedError {
+                    errno: Some(i64::from(nix::libc::ECONNREFUSED))
+                },
+                "{line}"
+            );
+        }
+        // SCTP is a stream protocol too, so it does get the reply.
+        h.backend.sctp = true;
+        assert!(matches!(
+            one(
+                &mut h,
+                "14 send-probe ip-4 127.0.0.1 protocol sctp port 164"
+            )
+            .kind,
+            ResponseKind::Probe {
+                result: ProbeResult::Reply,
+                ..
+            }
+        ));
         assert!(h.table.is_empty());
     }
 

@@ -44,6 +44,8 @@ pub struct LinuxBackend {
     /// echo header is serialized, so the value on the wire is the one C writes with
     /// `htons(getpid())` (construct_unix.c:118, probe.c:193).
     pub icmp_id: u16,
+    /// Set by `receive()` instead of exiting on the spot; see `ProbeBackend::take_fatal`.
+    fatal: Option<Fatal>,
 }
 
 impl LinuxBackend {
@@ -63,6 +65,7 @@ impl LinuxBackend {
             v6: v6.ok(),
             sctp: false,
             icmp_id: (nix::unistd::getpid().as_raw() as u32 & 0xffff) as u16,
+            fatal: None,
         })
     }
 
@@ -268,7 +271,12 @@ impl LinuxBackend {
                     if family.is_raw() {
                         return Ok(());
                     }
-                    match errqueue::read_error(sock, &mut err_buf, QueuedError::Unreachable)? {
+                    // No cmsg means no ICMP code either, so the fallback carries code 0.
+                    match errqueue::read_error(
+                        sock,
+                        &mut err_buf,
+                        QueuedError::Unreachable { code: 0 },
+                    )? {
                         Some((offender, n, kind)) => self.deliver_queued(
                             sock,
                             table,
@@ -321,7 +329,7 @@ impl LinuxBackend {
             QueuedError::Refused => deconstruct::IcmpKind::DestUnreach {
                 code: deconstruct::port_unreach_code(version),
             },
-            QueuedError::Unreachable => deconstruct::IcmpKind::DestUnreach { code: 0 },
+            QueuedError::Unreachable { code } => deconstruct::IcmpKind::DestUnreach { code },
         }
     }
 
@@ -435,9 +443,12 @@ impl ProbeBackend for LinuxBackend {
             .collect()
     }
     fn receive(&mut self, table: &mut ProbeTable, now: Instant, out: &mut Vec<Response>) {
-        // `ProbeBackend::receive` cannot report failure, and neither can C: an unexpected
-        // receive errno is `error(EXIT_FAILURE, …, "Failure receiving replies")`
-        // (probe_unix.c:790), so we print the same message and exit 1.
+        // `ProbeBackend::receive` cannot report failure by return value, and C exits from
+        // inside `receive_replies()`: an unexpected receive errno is
+        // `error(EXIT_FAILURE, …, "Failure receiving replies")` (probe_unix.c:790). We park it
+        // for `take_fatal()` so `serve()` can flush the replies produced by this same call —
+        // C's own `printf`s are already out by then — and exit 1 through `Fatal`.
+        let mut fatal = None;
         for family in [&self.v4, &self.v6].into_iter().flatten() {
             let r = match &family.sockets {
                 sockets::Sockets::Raw { recv, .. } => {
@@ -448,10 +459,14 @@ impl ProbeBackend for LinuxBackend {
                     .and_then(|()| self.drain_socket(udp, family, table, now, out)),
             };
             if let Err(e) = r {
-                eprintln!("mtr-packet: Failure receiving replies: {e}");
-                std::process::exit(1);
+                fatal = Some(Fatal::Io("Failure receiving replies".into(), e));
+                break;
             }
         }
+        self.fatal = self.fatal.take().or(fatal);
+    }
+    fn take_fatal(&mut self) -> Option<Fatal> {
+        self.fatal.take()
     }
 }
 

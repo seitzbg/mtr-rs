@@ -23,8 +23,9 @@ pub enum QueuedError {
     /// Port unreachable (v4 type 3 code 3, v6 type 1 code 4): the datagram reached its
     /// destination — errno `ECONNREFUSED`.
     Refused,
-    /// Any other destination-unreachable: `no-route-host`.
-    Unreachable,
+    /// Any other destination-unreachable: `no-route-host`. The ICMP code travels along so the
+    /// entry can be turned back into the exact `DestUnreach` the normal matcher would see.
+    Unreachable { code: u8 },
 }
 
 /// ICMPv4 type/code → the kind of queued error, or `None` when the type is not an error at all.
@@ -32,7 +33,7 @@ pub fn kind_from_icmp4(ee_type: u8, ee_code: u8) -> Option<QueuedError> {
     match (ee_type, ee_code) {
         (ICMP_TIME_EXCEEDED, _) => Some(QueuedError::TimeExceeded),
         (ICMP_DEST_UNREACH, ICMP_PORT_UNREACH) => Some(QueuedError::Refused),
-        (ICMP_DEST_UNREACH, _) => Some(QueuedError::Unreachable),
+        (ICMP_DEST_UNREACH, code) => Some(QueuedError::Unreachable { code }),
         _ => None,
     }
 }
@@ -43,7 +44,7 @@ pub fn kind_from_icmp6(ee_type: u8, ee_code: u8) -> Option<QueuedError> {
     match (ee_type, ee_code) {
         (ICMP6_TIME_EXCEEDED, _) => Some(QueuedError::TimeExceeded),
         (ICMP6_DEST_UNREACH, ICMP6_PORT_UNREACH) => Some(QueuedError::Refused),
-        (ICMP6_DEST_UNREACH, _) => Some(QueuedError::Unreachable),
+        (ICMP6_DEST_UNREACH, code) => Some(QueuedError::Unreachable { code }),
         _ => None,
     }
 }
@@ -157,12 +158,19 @@ mod tests {
         // IPv4: time-exceeded 11, dest-unreach 3 with code 3 = port.
         assert_eq!(kind_from_icmp4(11, 0), Some(QueuedError::TimeExceeded));
         assert_eq!(kind_from_icmp4(3, 3), Some(QueuedError::Refused));
-        assert_eq!(kind_from_icmp4(3, 1), Some(QueuedError::Unreachable));
+        assert_eq!(
+            kind_from_icmp4(3, 1),
+            Some(QueuedError::Unreachable { code: 1 }),
+            "the ICMP code travels with the kind instead of being flattened to 0"
+        );
         assert_eq!(kind_from_icmp4(0, 0), None, "echo reply is not an error");
         // IPv6: time-exceeded 3, dest-unreach 1 with code 4 = port. The v4 numbers must not leak.
         assert_eq!(kind_from_icmp6(3, 0), Some(QueuedError::TimeExceeded));
         assert_eq!(kind_from_icmp6(1, 4), Some(QueuedError::Refused));
-        assert_eq!(kind_from_icmp6(1, 3), Some(QueuedError::Unreachable));
+        assert_eq!(
+            kind_from_icmp6(1, 3),
+            Some(QueuedError::Unreachable { code: 3 })
+        );
         assert_eq!(kind_from_icmp6(129, 0), None, "echo reply is not an error");
         assert_eq!(
             kind_from_icmp6(11, 0),

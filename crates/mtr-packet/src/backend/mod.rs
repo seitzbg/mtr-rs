@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use mtr_proto::{CProbeParams, Protocol, Response, ResponseKind};
 
+use crate::Fatal;
 use crate::probe_table::ProbeTable;
 
 #[cfg(test)]
@@ -28,6 +29,13 @@ pub trait ProbeBackend {
     ) -> std::io::Result<()>;
     fn recv_fds(&self) -> Vec<BorrowedFd<'_>>;
     fn receive(&mut self, table: &mut ProbeTable, now: Instant, out: &mut Vec<Response>);
+    /// A fatal error `receive()` hit. C ends the program from inside `receive_replies()`
+    /// (`error(EXIT_FAILURE, …, "Failure receiving replies")`, probe_unix.c:790) once its
+    /// replies have been printed; `receive()` cannot return a value, so it parks the error
+    /// here and `serve()` flushes the responses of that same call before failing with it.
+    fn take_fatal(&mut self) -> Option<Fatal> {
+        None
+    }
 }
 
 /// `report_packet_error()`: errno → reply name.

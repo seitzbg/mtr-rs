@@ -91,6 +91,13 @@ pub fn serve<B: ProbeBackend, W: Write>(
         helper
             .backend
             .receive(&mut helper.table, now, &mut responses);
+        if let Some(fatal) = helper.backend.take_fatal() {
+            for r in responses.drain(..) {
+                let _ = output.write_all(r.encode().as_bytes());
+            }
+            let _ = output.flush();
+            return Err(fatal);
+        }
         if pipe_open {
             let space = buffer.space_remaining();
             match nix::unistd::read(input, &mut read_buf[..space]) {
@@ -167,6 +174,33 @@ mod tests {
             "{text}"
         );
         assert!(h.table.is_empty());
+    }
+
+    /// A fatal receive error must not lose the responses `receive()` produced in the same
+    /// call: C exits from `receive_replies()` only after its `printf`s have gone out
+    /// (probe_unix.c:790), so `serve()` flushes first and then returns `Fatal`.
+    #[test]
+    fn a_fatal_receive_error_flushes_pending_responses_first() {
+        let (rd, wr) = pipe().unwrap();
+        set_nonblocking(rd.as_fd()).unwrap();
+        write(&wr, b"7 send-probe ip-4 127.0.0.1\n").unwrap();
+        let mut fake = FakeBackend::v4_only();
+        fake.reply_immediately = true;
+        fake.fail_receive = Some(nix::libc::ENOBUFS);
+        let mut h = Helper::new(fake);
+        let mut out = Vec::new();
+        let e = serve(&mut h, rd.as_fd(), &mut out).unwrap_err();
+        drop(wr);
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.starts_with("7 reply ip-4 127.0.0.1 round-trip-time"),
+            "{text}"
+        );
+        assert!(
+            e.to_string()
+                .starts_with("Failure receiving replies: No buffer space"),
+            "{e}"
+        );
     }
 
     #[test]

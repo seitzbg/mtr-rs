@@ -14,6 +14,9 @@ pub struct FakeBackend {
     pub sent: Vec<(i32, CProbeParams)>,
     pub fail_with: Option<i32>,
     pub reply_immediately: bool,
+    /// Errno for a fatal receive error, raised *after* this call's replies are produced.
+    pub fail_receive: Option<i32>,
+    fatal: Option<crate::Fatal>,
 }
 
 impl FakeBackend {
@@ -61,10 +64,14 @@ impl ProbeBackend for FakeBackend {
     fn recv_fds(&self) -> Vec<BorrowedFd<'_>> {
         Vec::new()
     }
+    fn take_fatal(&mut self) -> Option<crate::Fatal> {
+        self.fatal.take()
+    }
     fn receive(&mut self, table: &mut ProbeTable, _now: Instant, out: &mut Vec<Response>) {
         if !self.reply_immediately {
             return;
         }
+        let produced = !table.probes.is_empty();
         while let Some(p) = table.probes.pop() {
             out.push(Response {
                 token: p.token,
@@ -75,6 +82,12 @@ impl ProbeBackend for FakeBackend {
                     mpls: Vec::new(),
                 },
             });
+        }
+        if let Some(errno) = self.fail_receive.filter(|_| produced) {
+            self.fatal = Some(crate::Fatal::Io(
+                "Failure receiving replies".into(),
+                std::io::Error::from_raw_os_error(errno),
+            ));
         }
     }
 }
