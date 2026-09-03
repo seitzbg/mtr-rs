@@ -2,11 +2,13 @@
 //! ratatui table + detail pane. GPL-2.0-only.
 
 pub mod glyphs;
+pub mod input;
 pub mod palette;
 pub mod state;
 pub mod terminal;
 
 pub use glyphs::Glyphs;
+pub use input::{Input, map_key, parse_prompt, toggle_status};
 pub use palette::{Depth, Palette};
 pub use state::{Bounds, DetailTab, PromptKind, Quit, UiAction, UiState};
 
