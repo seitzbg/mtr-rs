@@ -1,5 +1,15 @@
 //! Linux backend: raw sockets with the unprivileged DGRAM fallback. Ported from
 //! packet/probe_unix.c (mtr 0.96, commit 7b01773). GPL-2.0-only.
+//!
+//! UDP destination ports (probe_unix.c:70-84, 96-111): on a raw socket the port lives in the
+//! UDP header we built, so the sockaddr port is 0. On a DGRAM socket the kernel writes the
+//! header, so the port has to be on the sockaddr — `dest_port` when the request gave one, else
+//! the sequence. C stores the sequence there as a host-order `int` into a network-order field
+//! (`*sockaddr_port_offset(&dst) = sequence`, probe_unix.c:83/109), so C's datagram goes to the
+//! byte-swapped port; that is harmless for C because its reply matching only ever looks at the
+//! fake UDP header travelling in the payload. We send to the sequence proper, so the target's
+//! port-unreachable is about the port we meant; the fake header's destination port is the
+//! sequence either way, so matching is unaffected.
 
 pub mod construct;
 pub mod deconstruct;
@@ -16,7 +26,9 @@ use socket2::{SockAddr, Socket};
 use super::ProbeBackend;
 use crate::Fatal;
 use crate::probe_table::{Probe, ProbeTable, addr, rtt_us};
-use construct::{icmp_echo, packet_size, udp_datagram, udp_ports, udp_source_port_from_pid};
+use construct::{
+    UDP_HEADER, icmp_echo, packet_size, udp_datagram, udp_ports, udp_source_port_from_pid,
+};
 use deconstruct::{Inner, Parsed, match_reply, parse_icmp4, parse_icmp6};
 use errqueue::QueuedError;
 use sockets::{Family, apply_probe_options};
@@ -147,8 +159,26 @@ impl LinuxBackend {
             Some(probe.local),
             family.is_raw(),
         )?;
-        sock.send_to(&buf, &SockAddr::from(dst))?;
-        Ok(())
+        let dst = SockAddr::from(dst);
+        match sock.send_to(&buf, &dst) {
+            Ok(_) => Ok(()),
+            // On a DGRAM socket a queued ICMP error also sets `sk_err`, and the next syscall on
+            // the socket — here the *next* probe's `sendto` — reports and clears it, dropping
+            // the datagram. That errno belongs to an earlier probe, not this one, so retry
+            // once; a genuinely unroutable destination fails again and is returned. C hits the
+            // same wart and mis-reports the new probe (probe_unix.c:629-633).
+            Err(e)
+                if !family.is_raw()
+                    && matches!(
+                        e.raw_os_error(),
+                        Some(nix::libc::ECONNREFUSED | nix::libc::EHOSTUNREACH)
+                    ) =>
+            {
+                sock.send_to(&buf, &dst)?;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// `respond_to_probe()` (probe.c:250-320): the probe leaves the table exactly once and its
@@ -228,7 +258,30 @@ impl LinuxBackend {
                         self.deliver(table, &p, version, from_ip, now, out);
                     }
                 }
-                Err(nix::errno::Errno::EAGAIN) => return Ok(()),
+                Err(nix::errno::Errno::EAGAIN) => {
+                    // `sk_err` may already have been consumed by another syscall on this socket
+                    // (a later probe's `sendto`, see `send_datagram`), leaving the error-queue
+                    // entry behind with nothing to announce it. So on a DGRAM socket look at the
+                    // queue itself before giving up; an empty queue is `Ok(None)` and ends the
+                    // turn. `Unreachable` is the fallback only if the cmsg carries no ICMP
+                    // origin, in which case we know nothing better.
+                    if family.is_raw() {
+                        return Ok(());
+                    }
+                    match errqueue::read_error(sock, &mut err_buf, QueuedError::Unreachable)? {
+                        Some((offender, n, kind)) => self.deliver_queued(
+                            sock,
+                            table,
+                            version,
+                            offender,
+                            &err_buf[..n],
+                            kind,
+                            now,
+                            out,
+                        ),
+                        None => return Ok(()),
+                    }
+                }
                 Err(nix::errno::Errno::EINTR) => continue,
                 Err(e @ (nix::errno::Errno::EHOSTUNREACH | nix::errno::Errno::ECONNREFUSED)) => {
                     // The errno is only a first guess; Task 11 refines it from the cmsg.
@@ -272,8 +325,7 @@ impl LinuxBackend {
         }
     }
 
-    /// `handle_error_queue_packet()` (deconstruct_unix.c:127-146) — the ICMP half now, the UDP
-    /// half in Task 12. C picks the branch from the send socket's `SO_PROTOCOL`
+    /// `handle_error_queue_packet()` (deconstruct_unix.c:127-146). C picks the branch from the send socket's `SO_PROTOCOL`
     /// (probe_unix.c:824-828); `Socket::protocol()` is the same `getsockopt`.
     #[allow(clippy::too_many_arguments)]
     fn deliver_queued(
@@ -288,7 +340,33 @@ impl LinuxBackend {
         out: &mut Vec<Response>,
     ) {
         if matches!(sock.protocol(), Ok(Some(socket2::Protocol::UDP))) {
-            return; // Task 12
+            // Deviation 26(a): the datagram we sent started with the UDP header we built
+            // (construct_udp{4,6}_packet), and the error queue hands that payload back — but
+            // with no inner IP header, hence `addrs: None`. The matching rules themselves live
+            // once, in `deconstruct::match_udp` (Task 9).
+            if payload.len() < UDP_HEADER {
+                return;
+            }
+            let (src_port, dst_port, checksum) = (
+                u16::from_be_bytes([payload[0], payload[1]]),
+                u16::from_be_bytes([payload[2], payload[3]]),
+                u16::from_be_bytes([payload[6], payload[7]]),
+            );
+            let Some(idx) = deconstruct::match_udp(table, src_port, dst_port, checksum, None)
+            else {
+                return;
+            };
+            let result = match Self::queued_icmp_kind(kind, version) {
+                deconstruct::IcmpKind::TimeExceeded => ProbeResult::TtlExpired,
+                deconstruct::IcmpKind::DestUnreach { code }
+                    if code == deconstruct::port_unreach_code(version) =>
+                {
+                    ProbeResult::Reply
+                }
+                _ => ProbeResult::NoRouteHost,
+            };
+            self.respond(table, idx, result, offender, now, Vec::new(), out);
+            return;
         }
         if payload.len() < construct::ICMP_HEADER {
             return;
@@ -336,6 +414,10 @@ impl ProbeBackend for LinuxBackend {
         let probe = &mut table.probes[idx];
         probe.remote = remote;
         probe.local = local;
+        // `command.rs` sets this too; doing it here as well keeps the backend's own invariant
+        // ("the probe records what we sent") true for callers that drive it directly, which
+        // `match_udp`'s `protocol == Udp` check depends on.
+        probe.protocol = params.protocol;
         probe.departure = Instant::now();
         match params.protocol {
             Protocol::Icmp | Protocol::Udp => self.send_datagram(family, probe, params),
@@ -376,7 +458,7 @@ impl ProbeBackend for LinuxBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mtr_proto::{CProbeParams, ProbeResult, ResponseKind};
+    use mtr_proto::{CProbeParams, ProbeResult, Protocol, ResponseKind};
     use std::net::IpAddr;
     use std::time::Duration;
 
@@ -614,5 +696,66 @@ mod tests {
                 "{e}"
             ),
         }
+    }
+
+    fn udp(remote: &str, version: u8, dest_port: i32, local_port: i32) -> CProbeParams {
+        CProbeParams {
+            ip_version: version,
+            remote_address: Some(remote.into()),
+            protocol: Protocol::Udp,
+            dest_port,
+            local_port,
+            timeout: 3,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn udp_to_a_closed_loopback_port_is_a_reply_in_all_port_modes() {
+        let Some(mut b) = backend(4) else { return };
+        for (tok, params) in [
+            (80, udp("127.0.0.1", 4, 0, 0)),
+            (81, udp("127.0.0.1", 4, 990, 0)),
+            (82, udp("127.0.0.1", 4, 0, 1991)),
+            (83, udp("127.0.0.1", 4, 990, 1991)),
+            (84, udp("::1", 6, 0, 0)),
+        ] {
+            if params.ip_version == 6 && !b.ip_version_supported(6) {
+                continue; // no IPv6 probe sockets here
+            }
+            let mut t = ProbeTable::new();
+            let i = t.alloc(tok, Instant::now(), 3).unwrap();
+            b.send_probe(&mut t, i, &params).unwrap();
+            let out = pump(&mut b, &mut t, Duration::from_secs(3), |o| !o.is_empty());
+            assert_eq!(out.len(), 1, "token {tok}: {out:?}");
+            assert!(
+                matches!(
+                    out[0].kind,
+                    ResponseKind::Probe {
+                        result: ProbeResult::Reply,
+                        ..
+                    }
+                ),
+                "token {tok}: {out:?}"
+            );
+            assert!(t.is_empty());
+        }
+    }
+
+    #[test]
+    fn udp_probe_records_the_ports_it_used() {
+        let Some(mut b) = backend(4) else { return };
+        let mut t = ProbeTable::new();
+        let i = t.alloc(85, Instant::now(), 3).unwrap();
+        b.send_probe(&mut t, i, &udp("127.0.0.1", 4, 990, 1991))
+            .unwrap();
+        assert_eq!(
+            (t.probes[i].local.port(), t.probes[i].remote.port()),
+            (1991, 990)
+        );
+        let i2 = t.alloc(86, Instant::now(), 3).unwrap();
+        b.send_probe(&mut t, i2, &udp("127.0.0.1", 4, 0, 0))
+            .unwrap();
+        assert_eq!(t.probes[i2].remote.port(), t.probes[i2].sequence);
     }
 }
