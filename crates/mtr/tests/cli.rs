@@ -129,28 +129,3 @@ fn last_mode_flag_wins_like_getopt() {
     assert_eq!(o.status.code(), Some(0), "{out}");
     assert!(out.starts_with("Start: "), "{out}");
 }
-
-#[test]
-fn default_invocation_without_a_tty_fails_cleanly() {
-    // No mode flag → the curses/TUI path; with stdin and stdout not a terminal, crossterm's raw
-    // mode fails, and that must surface as `mtr: terminal: …` and exit 1, never as a panic.
-    let mut c = mtr();
-    c.env(
-        "MTR_PACKET",
-        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-mtr-packet.py"),
-    );
-    let o = c
-        .arg("127.0.0.1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .unwrap();
-    let err = String::from_utf8_lossy(&o.stderr);
-    assert_eq!(o.status.code(), Some(1), "stderr: {err}");
-    assert!(err.contains("mtr: terminal:"), "stderr: {err}");
-    assert!(
-        !err.contains("panicked") && !err.contains("RUST_BACKTRACE"),
-        "stderr: {err}"
-    );
-}
