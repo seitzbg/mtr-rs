@@ -119,15 +119,9 @@ pub fn check_sctp_support() -> bool {
     Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::SCTP)).is_ok()
 }
 
-/// The mark/device/TOS/TTL block that both the datagram probes (construct_unix.c:624-698 for
-/// v4, 766-826 for v6) and the stream probes (construct_unix.c:324-406) apply. Keeping it in
-/// one place is why `stream.rs` (Task 13) has no copy of it.
-pub fn set_common_options(
-    sock: &Socket,
-    version: u8,
-    params: &CProbeParams,
-) -> std::io::Result<()> {
-    let einval = || std::io::Error::from_raw_os_error(nix::libc::EINVAL);
+/// The first half of C's option block: the routing mark and the bind-to-device, both applied
+/// *before* the bind (construct_unix.c:624-636 for v4, 766-778 for v6).
+pub fn set_mark_and_device(sock: &Socket, params: &CProbeParams) -> std::io::Result<()> {
     if params.routing_mark != 0 {
         // Needs CAP_NET_ADMIN, so only touched when the client asked for it.
         sock.set_mark(params.routing_mark)?;
@@ -135,6 +129,13 @@ pub fn set_common_options(
     if let Some(dev) = &params.local_device {
         sock.bind_device(Some(dev.as_bytes()))?;
     }
+    Ok(())
+}
+
+/// The second half: TOS and TTL, which C sets *after* the bind (construct_unix.c:679-698,
+/// 812-826).
+pub fn set_tos_and_ttl(sock: &Socket, version: u8, params: &CProbeParams) -> std::io::Result<()> {
+    let einval = || std::io::Error::from_raw_os_error(nix::libc::EINVAL);
     let tos = u32::try_from(params.type_of_service).map_err(|_| einval())?;
     let ttl = u32::try_from(params.ttl).map_err(|_| einval())?;
     if version == 6 {
@@ -147,11 +148,21 @@ pub fn set_common_options(
     Ok(())
 }
 
-/// Per-probe options on a shared send socket: the common block plus the bind C does between
-/// the device and the TOS calls. `local: None` means "do not bind" — the stream path binds
-/// itself to `local:sequence` after setting `SO_REUSEPORT`/`SO_REUSEADDR` (Task 13). Setting
-/// TOS/TTL after the bind rather than around it is observably identical: they are socket-level
-/// options unaffected by binding.
+/// The whole mark/device/TOS/TTL block for a socket that binds itself: the stream probes
+/// (construct_unix.c:324-406) bind inside `open_stream_socket()`, so they apply both halves at
+/// once. Keeping it in one place is why `stream.rs` (Task 13) has no copy of it.
+pub fn set_common_options(
+    sock: &Socket,
+    version: u8,
+    params: &CProbeParams,
+) -> std::io::Result<()> {
+    set_mark_and_device(sock, params)?;
+    set_tos_and_ttl(sock, version, params)
+}
+
+/// Per-probe options on a shared send socket, in C's order: mark, device, bind, TOS, TTL
+/// (construct_unix.c:624-698). `local: None` means "do not bind" — the stream path binds
+/// itself to `local:sequence` after setting `SO_REUSEPORT`/`SO_REUSEADDR` (Task 13).
 pub fn apply_probe_options(
     sock: &Socket,
     version: u8,
@@ -159,6 +170,7 @@ pub fn apply_probe_options(
     local: Option<SocketAddr>,
     is_raw: bool,
 ) -> std::io::Result<()> {
+    set_mark_and_device(sock, params)?;
     if let Some(local) = local {
         let already_bound = match sock.local_addr()?.as_socket() {
             Some(cur) if is_raw => cur == local,
@@ -169,27 +181,48 @@ pub fn apply_probe_options(
             sock.bind(&SockAddr::from(local))?;
         }
     }
-    set_common_options(sock, version, params)
+    set_tos_and_ttl(sock, version, params)
 }
 
-/// Loopback tests gate on this: with neither `cap_net_raw` nor open ping sockets there is no
-/// probe socket at all, and the test returns early instead of failing (Global Constraints).
-#[cfg(test)]
-pub(crate) fn dgram_available(version: u8) -> bool {
+/// Whether a probe socket for `version` can be opened at all. The loopback tests gate on this:
+/// with neither `cap_net_raw` nor open ping sockets there is no socket to probe *with*, and
+/// those tests return early instead of failing (Global Constraints). Deliberately not
+/// `#[cfg(test)]`, so integration tests can gate on it too — and deliberately *not* used by
+/// `ipv4_opens_raw_or_falls_back_to_dgram_with_recverr` below, which must fail rather than pass
+/// vacuously if opening ever regresses.
+pub fn dgram_available(version: u8) -> bool {
     Family::open(version).is_ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nix::sys::socket::getsockopt;
 
+    /// The DGRAM fallback is worthless without `IP_RECVERR`/`IPV6_RECVERR`: it is the only way
+    /// a time-exceeded ever reaches us on a ping socket (probe_unix.c:815-819).
+    fn assert_recverr(f: &Family) {
+        if let Sockets::Dgram { icmp, udp } = &f.sockets {
+            for sock in [icmp, udp] {
+                let on = if f.version == 6 {
+                    getsockopt(sock, sockopt::Ipv6RecvErr).unwrap()
+                } else {
+                    getsockopt(sock, sockopt::Ipv4RecvErr).unwrap()
+                };
+                assert!(
+                    on,
+                    "RECVERR must be set on every IPv{} DGRAM socket",
+                    f.version
+                );
+            }
+        }
+    }
+
+    /// Deliberately ungated: if raw *and* DGRAM opening both regress this must fail loudly
+    /// rather than skip (Task 7 review). Every box mtr runs on has one or the other.
     #[test]
     fn ipv4_opens_raw_or_falls_back_to_dgram_with_recverr() {
-        if !dgram_available(4) {
-            eprintln!("skipping: no cap_net_raw and no open ping sockets");
-            return;
-        }
-        let f = Family::open(4).expect("ping sockets are open to all groups on this box");
+        let f = Family::open(4).expect("raw sockets with cap_net_raw, else open ping sockets");
         assert_eq!(f.version, 4);
         // Unprivileged test processes get the DGRAM pair; with cap_net_raw the raw triple.
         match &f.sockets {
@@ -200,6 +233,7 @@ mod tests {
             }
             Sockets::Raw { .. } => assert_eq!(f.recv_fds().len(), 1),
         }
+        assert_recverr(&f);
         f.set_nonblocking().unwrap();
     }
 
@@ -207,20 +241,29 @@ mod tests {
     fn ipv6_opens_too_on_this_box() {
         // The box has link-local + ULA IPv6 but no global address; opening the sockets and
         // reaching `::1` works regardless, which is all this test and the v6 loopback tests need.
-        if !dgram_available(6) {
-            eprintln!("skipping: no IPv6 probe sockets");
-            return;
-        }
         let f = Family::open(6).expect("IPv6 sockets open (loopback IPv6 is always present)");
         assert_eq!(f.version, 6);
+        assert_recverr(&f);
     }
 
     #[test]
     fn sctp_support_is_detected() {
-        assert!(
-            check_sctp_support(),
-            "the sctp module is loaded on this box"
-        );
+        // Opening the socket is what autoloads the module, so probe first and read after.
+        let detected = check_sctp_support();
+        let module_present = std::fs::read_to_string("/proc/net/protocols")
+            .map(|s| s.lines().any(|l| l.starts_with("SCTP")))
+            .unwrap_or(false);
+        if module_present {
+            assert!(
+                detected,
+                "the sctp module is loaded, so the probe socket must open"
+            );
+        } else {
+            assert!(
+                !detected,
+                "no SCTP in /proc/net/protocols, yet a socket opened"
+            );
+        }
     }
 
     #[test]

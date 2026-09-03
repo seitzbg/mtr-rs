@@ -19,7 +19,9 @@ pub struct LinuxBackend {
     pub v4: Option<Family>,
     pub v6: Option<Family>,
     pub sctp: bool,
-    /// `htons(getpid())` as the ICMP id, see probe.c:193 and construct_unix.c:118.
+    /// The ICMP id: the low 16 bits of our pid, kept in host order and byte-swapped when the
+    /// echo header is serialized, so the value on the wire is the one C writes with
+    /// `htons(getpid())` (construct_unix.c:118, probe.c:193).
     pub icmp_id: u16,
 }
 
