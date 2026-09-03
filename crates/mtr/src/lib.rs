@@ -4,6 +4,7 @@
 
 pub mod asn;
 pub mod cli;
+pub mod emit;
 pub mod helper;
 pub mod names;
 pub mod options;
