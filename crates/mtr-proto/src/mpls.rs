@@ -29,7 +29,8 @@ pub fn parse_mpls_list(s: &str) -> Result<Vec<MplsLabel>, ParseError> {
             break;
         }
 
-        let v: u64 = field
+        // cmdpipe.c:570 uses strtol, then stores into unsigned long / uint8_t: negatives wrap.
+        let v: i64 = field
             .parse()
             .map_err(|_| ParseError::MalformedMpls(s.to_string()))?;
         current_group.push(v as u32); // C stores into unsigned long / uint8_t, truncating
@@ -149,5 +150,20 @@ mod tests {
         assert!(parse_mpls_list("1,x,3,4").is_err());
         // "1,2,3,4,x" — garbage after a complete label but before cap, error.
         assert!(parse_mpls_list("1,2,3,4,x").is_err());
+    }
+
+    #[test]
+    fn negative_fields_wrap_like_strtol_into_unsigned() {
+        // cmdpipe.c:570 parses with strtol and stores into unsigned fields.
+        let v = parse_mpls_list("-1,-1,-1,-1").unwrap();
+        assert_eq!(
+            v[0],
+            MplsLabel {
+                label: u32::MAX,
+                tc: 255,
+                bottom_of_stack: true,
+                ttl: 255
+            }
+        );
     }
 }

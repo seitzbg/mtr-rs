@@ -3,12 +3,16 @@
 //! in mtr 0.96 (commit 7b01773). GPL-2.0-only.
 #![forbid(unsafe_code)]
 
+pub mod cdecode;
 pub mod error;
 pub mod mpls;
 pub mod request;
 pub mod response;
 pub mod tokenize;
 
+pub use cdecode::{
+    CProbeParams, InvalidArgument, check_support_feature, decode_send_probe, strtol_full,
+};
 pub use error::ParseError;
 pub use mpls::MplsLabel;
 pub use request::{Feature, ProbeParams, Protocol, Request, RequestKind};
