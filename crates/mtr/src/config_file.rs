@@ -7,12 +7,54 @@
 //! upper layers as [`ValueSource::CommandLine`]; the file only fills the keys clap left at their
 //! default. This file has no counterpart in C mtr. GPL-2.0-only.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
 use crate::cli::Args;
 use crate::tui::palette::RttThresholds;
+
+/// What `--init-config` writes, and — byte for byte, see the test below — the content of
+/// `docs/config.example.toml`.
+pub const TEMPLATE: &str = r##"# mtr-rs configuration file — ~/.config/mtr-rs/config.toml
+# ($XDG_CONFIG_HOME/mtr-rs/config.toml when XDG_CONFIG_HOME is set; --config PATH overrides both.)
+#
+# Precedence, lowest to highest:
+#   built-in defaults  <  this file  <  $MTR_OPTIONS  <  the command line
+#
+# Every key is optional and is shown below commented out, with its built-in default.
+# Uncomment a key to change it.
+
+[display]
+# The four upper bounds of the RTT colour ramp, in milliseconds: below the first is green, then
+# yellow, magenta and red, and at or above the last, bold red. Same as --rtt-thresholds.
+#rtt_thresholds_ms = [30, 100, 200, 500]
+# The columns to show, using the field letters of -o.
+#fields = "LS NABWV"
+# ASCII glyphs and borders instead of Unicode ones (--ascii).
+#ascii = false
+# "auto" colours unless NO_COLOR is set, "always" colours even then, "never" is --no-color.
+#color = "auto"
+# Show the Recent sparkline column when the TUI starts (toggled with d).
+#sparkline = true
+# Open the detail pane when the TUI starts (toggled with Enter).
+#detail_pane = true
+
+[probe]
+# Seconds between probe cycles (-i). Values below 1.0 need root.
+#interval = 1.0
+# The highest TTL probed (-m).
+#max_ttl = 30
+# Consecutive unanswered hops before the scan stops (-U).
+#max_unknown = 12
+# Seconds a probe may stay outstanding before it counts as lost (-Z).
+#timeout = 10
+# Resolve host names; false is -n.
+#dns = true
+# Look up origin AS numbers; true is -z.
+#asn = false
+"##;
 
 /// `color = "auto" | "always" | "never"`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -137,6 +179,26 @@ pub fn load(path: &Path) -> Result<FileConfig, String> {
     cfg.validate()
         .map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(cfg)
+}
+
+/// `--init-config`: create the parent directories and write [`TEMPLATE`], refusing to touch an
+/// existing file. The message is path-prefixed like [`load`]'s.
+pub fn init(path: &Path) -> Result<(), String> {
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                format!("{}: file exists, refusing to overwrite it", path.display())
+            }
+            _ => format!("{}: {e}", path.display()),
+        })?;
+    f.write_all(TEMPLATE.as_bytes())
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Push the file's values into `args` for every key the command line (or `$MTR_OPTIONS`) left
@@ -432,6 +494,68 @@ asn = true
                 .unwrap_err()
                 .contains("unknown variant")
         );
+    }
+
+    #[test]
+    fn the_template_matches_the_documented_example_byte_for_byte() {
+        let doc = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/config.example.toml"
+        );
+        assert_eq!(
+            std::fs::read_to_string(doc).unwrap(),
+            TEMPLATE,
+            "docs/config.example.toml and config_file::TEMPLATE have drifted apart"
+        );
+    }
+
+    #[test]
+    fn the_template_parses_to_the_built_in_defaults() {
+        // Every key is commented out, so the written file is valid TOML that changes nothing …
+        assert_eq!(parse(TEMPLATE).unwrap(), FileConfig::default());
+        // … and uncommenting every key yields exactly the documented defaults.
+        let all: String = TEMPLATE
+            .lines()
+            .map(|l| {
+                l.strip_prefix('#')
+                    .filter(|r| r.contains(" = "))
+                    .unwrap_or(l)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cfg = parse(&all).unwrap();
+        assert_eq!(cfg.display.rtt_thresholds_ms, Some(vec![30, 100, 200, 500]));
+        assert_eq!(cfg.display.fields.as_deref(), Some("LS NABWV"));
+        assert_eq!(cfg.display.color, Some(ColorChoice::Auto));
+        assert_eq!(cfg.probe.interval, Some(1.0));
+        let o = with_file(&all, |path| {
+            let mut a = Args::parse_argv(vec!["mtr".to_string(), "h".to_string()]).unwrap();
+            apply(&mut a, &load(path).unwrap());
+            a.into_options(false).unwrap()
+        });
+        let d = opts("", None, &["h"]);
+        assert_eq!(o.rtt_thresholds, d.rtt_thresholds);
+        assert_eq!(o.config, d.config);
+        assert_eq!(
+            (o.ascii, o.color, o.sparkline, o.detail_pane),
+            (d.ascii, d.color, d.sparkline, d.detail_pane)
+        );
+    }
+
+    #[test]
+    fn init_writes_the_template_once_and_refuses_to_overwrite() {
+        let dir = std::env::temp_dir().join(format!("mtr-rs-init-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("config.toml");
+        init(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), TEMPLATE);
+        assert_eq!(
+            init(&path).unwrap_err(),
+            format!("{}: file exists, refusing to overwrite it", path.display())
+        );
+        // the round trip: what init wrote loads cleanly
+        assert_eq!(load(&path).unwrap(), FileConfig::default());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

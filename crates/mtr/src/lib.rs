@@ -86,6 +86,22 @@ pub async fn run(argv: Vec<String>) -> i32 {
         return 0;
     }
     let cfg_path = config_file::resolve_path(args.config.as_deref());
+    if args.init_config {
+        let Some(p) = &cfg_path else {
+            eprintln!("mtr: config: no path: set $HOME or $XDG_CONFIG_HOME, or pass --config");
+            return 1;
+        };
+        return match config_file::init(p) {
+            Ok(()) => {
+                println!("{}", p.display());
+                0
+            }
+            Err(msg) => {
+                eprintln!("mtr: config: {msg}");
+                1
+            }
+        };
+    }
     // A `None` path means no `$HOME` and no absolute `$XDG_CONFIG_HOME`, i.e. there is no file to
     // read — the same situation as a file that does not exist.
     if let Some(p) = &cfg_path {

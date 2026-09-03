@@ -216,3 +216,39 @@ fn the_config_file_supplies_defaults_the_command_line_still_overrides() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("Failed to resolve host"));
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
+
+#[test]
+fn init_config_writes_the_file_once_and_prints_its_path() {
+    let path = temp_config("init", "");
+    let arg = path.to_str().unwrap();
+    let (code, out, err) = run(&["--init-config", "--config", arg]);
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(out, format!("{}\n", path.display()));
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        include_str!("../../../docs/config.example.toml")
+    );
+    // a second run refuses rather than clobbering it
+    let (code, _, err) = run(&["--init-config", "--config", arg]);
+    assert_eq!(code, Some(1));
+    assert!(
+        err.contains("file exists, refusing to overwrite it"),
+        "{err}"
+    );
+    // and what it wrote is loadable
+    let (_, _, err) = run(&["--config", arg, "-r", "no-such-host.invalid"]);
+    assert!(err.contains("Failed to resolve host"), "{err}");
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn init_config_creates_missing_parent_directories() {
+    let dir = std::env::temp_dir().join(format!("mtr-rs-cli-cfg-{}-mkdir", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("a").join("b").join("config.toml");
+    let (code, out, err) = run(&["--init-config", "--config", path.to_str().unwrap()]);
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(out.trim_end(), path.to_str().unwrap());
+    assert!(path.is_file());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
