@@ -41,9 +41,10 @@ impl ProbeBackend for FakeBackend {
         idx: usize,
         params: &CProbeParams,
     ) -> std::io::Result<()> {
-        if let Some(errno) = self.fail_with {
-            return Err(std::io::Error::from_raw_os_error(errno));
-        }
+        // Set `remote` before honouring `fail_with`: C's send_probe() resolves the address
+        // and stores it in probe->remote_addr before the connect() that can fail, and
+        // report_packet_error()'s ECONNREFUSED path (probe_unix.c:617-619) reports that
+        // address, so a stream-connect failure still carries the real destination.
         let remote: IpAddr = params
             .remote_address
             .as_deref()
@@ -51,6 +52,9 @@ impl ProbeBackend for FakeBackend {
             .parse()
             .map_err(|_| std::io::Error::from_raw_os_error(nix::libc::EINVAL))?;
         table.probes[idx].remote = std::net::SocketAddr::new(remote, 0);
+        if let Some(errno) = self.fail_with {
+            return Err(std::io::Error::from_raw_os_error(errno));
+        }
         self.sent.push((table.probes[idx].token, params.clone()));
         Ok(())
     }

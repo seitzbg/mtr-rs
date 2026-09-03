@@ -329,16 +329,14 @@ mod tests {
         // ECONNREFUSED from a stream connect means the destination answered: an immediate reply.
         h.backend.fail_with = Some(nix::libc::ECONNREFUSED);
         let r = one(&mut h, "10 send-probe ip-4 127.0.0.1 protocol tcp port 164");
-        assert!(
-            matches!(
-                r.kind,
-                ResponseKind::Probe {
-                    result: ProbeResult::Reply,
-                    ..
-                }
-            ),
-            "{r:?}"
-        );
+        match r.kind {
+            ResponseKind::Probe {
+                result: ProbeResult::Reply,
+                addr,
+                ..
+            } => assert_eq!(addr, "127.0.0.1".parse::<std::net::IpAddr>().unwrap()),
+            other => panic!("{other:?}"),
+        }
         assert!(h.table.is_empty());
     }
 

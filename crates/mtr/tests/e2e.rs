@@ -70,10 +70,12 @@ fn wide_report_json_and_csv_with_the_fake_helper() {
 
 #[test]
 fn missing_helper_is_a_clear_fatal_error() {
-    // helper::candidates() searches `<dir of current exe>/mtr-packet` first; running the
-    // `mtr` binary straight out of `target/debug` would find the sibling mtr-packet built
-    // by the workspace, defeating MTR_PACKET/PATH below. Run a copy from an empty temp
-    // directory instead, so no sibling helper exists.
+    // helper::candidates_from() tries $MTR_PACKET, then `mtr-packet` on $PATH, then
+    // `<dir of current exe>/mtr-packet`, then `./mtr-packet`. The two overrides below
+    // neutralise the first two candidates, but running the `mtr` binary straight out of
+    // `target/debug` would still find the sibling mtr-packet built by the workspace as the
+    // third candidate. Run a copy from an empty temp directory instead, so no sibling
+    // helper exists there either.
     let dir = std::env::temp_dir().join(format!(
         "mtr-e2e-missing-helper-{}-{}",
         std::process::id(),
