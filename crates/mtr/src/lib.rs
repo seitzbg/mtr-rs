@@ -11,6 +11,8 @@ pub mod names;
 pub mod options;
 pub mod resolver;
 pub mod target;
+#[doc(hidden)]
+pub mod testing;
 pub mod tui;
 pub mod width;
 
