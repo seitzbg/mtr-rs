@@ -26,7 +26,7 @@ pub struct Glyphs {
 
 pub static UNICODE: Glyphs = Glyphs {
     bars: ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"],
-    loss: "░",
+    loss: "×",
     pending: " ",
     selected: "▶",
     lost_mark: "×",
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn sets_have_eight_bars_and_ascii_is_pure_ascii() {
         assert_eq!(UNICODE.bars, ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]);
-        assert_eq!(UNICODE.loss, "░");
+        assert_eq!(UNICODE.loss, "×");
         for g in [
             ASCII.loss,
             ASCII.pending,

@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use crate::asn;
 use crate::names::{addr_name, hop_name};
 use crate::tui::render::View;
-use crate::tui::render::sparkline::{Scale, cells, glyph};
+use crate::tui::render::sparkline::{Scale, cells_for_hop, glyph};
 use crate::width::{display_width, pad_right, truncate_to};
 
 pub const HOST_MIN: usize = 20;
@@ -226,10 +226,10 @@ pub fn render(view: &View, area: Rect, buf: &mut Buffer) {
                 spans.extend(stat_spans(view, hop));
                 if cols.spark > 0 {
                     spans.push(Span::raw(" "));
-                    for c in cells(&hop.history, cols.spark, &scale) {
+                    for c in cells_for_hop(hop, cols.spark, &scale) {
                         let style = match c {
                             crate::tui::render::sparkline::Cell::Rtt(_, us) => pal.rtt(us),
-                            crate::tui::render::sparkline::Cell::Lost => pal.loss(100_000),
+                            crate::tui::render::sparkline::Cell::Lost => pal.lost_sample(),
                             crate::tui::render::sparkline::Cell::Pending => Style::new(),
                         };
                         spans.push(Span::styled(glyph(&c, g), style));
@@ -276,12 +276,13 @@ pub fn render(view: &View, area: Rect, buf: &mut Buffer) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{Fixture, ip, row_text, view_fixture};
+    use crate::testing::{Answer, Fixture, drive, ip, row_text, view_fixture};
     use mtr_core::{Command, Config, Engine, Event};
     use mtr_proto::{MplsLabel, ProbeResult, ResponseKind};
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use std::time::Instant;
+    use ratatui::style::{Color, Modifier};
+    use std::time::{Duration, Instant};
 
     /// One hop (max_ttl 1) answered by two addresses, the second with an MPLS label.
     /// A `Fixture` (not a `View`-returning closure: a closure cannot express the higher-ranked
@@ -436,8 +437,8 @@ mod tests {
         assert!(r2.starts_with("   2. ???"), "{r2:?}");
         assert!(r2.contains("100.00%     2    0.0"), "{r2:?}");
         assert!(
-            r2.trim_end().ends_with("░░"),
-            "lost samples in the sparkline: {r2:?}"
+            !r2.contains('×'),
+            "a hop that never answered has a blank sparkline, not lost marks: {r2:?}"
         );
         let r3 = row_text(&buf, 3);
         assert!(r3.starts_with("▶  3. 192.0.2.10"), "{r3:?}");
@@ -491,5 +492,42 @@ mod tests {
             row_text(&buf, 1)
         );
         assert!(row_text(&buf, 2).starts_with("   3. 192.0.2.10"));
+    }
+
+    #[test]
+    fn lost_sample_on_an_answering_hop_is_a_thin_red_mark_not_the_full_loss_style() {
+        let cfg = Config {
+            max_ttl: 1,
+            max_ping: 2,
+            force_max_ping: true,
+            grace_time: 0.1,
+            ..Config::default()
+        };
+        // ttl 1 answers on the first cycle, then goes quiet: an answering hop with one drop.
+        let (engine, end) = drive(cfg, |_ttl, cycle| match cycle {
+            1 => Answer::Reply {
+                addr: ip("10.0.0.1"),
+                rtt_us: 500,
+                mpls: vec![],
+            },
+            _ => Answer::NoReply,
+        });
+        let f = Fixture::around(engine, end + Duration::from_secs(1));
+        assert!(f.engine.hops()[0].received() > 0, "hop did answer once");
+
+        let area = Rect::new(0, 0, 80, 2);
+        let mut buf = Buffer::empty(area);
+        render(&f.view(), area, &mut buf);
+        let r1 = row_text(&buf, 1);
+        let x = r1
+            .chars()
+            .position(|c| c == '×')
+            .unwrap_or_else(|| panic!("no lost mark in {r1:?}")) as u16;
+        let cell = buf.cell((x, 1)).unwrap();
+        assert_eq!(cell.fg, Color::Red, "{r1:?}");
+        assert!(
+            !cell.modifier.contains(Modifier::BOLD),
+            "a single drop is not the bold 100%-loss style: {r1:?}"
+        );
     }
 }

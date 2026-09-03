@@ -110,6 +110,11 @@ impl Palette {
     pub fn alert(&self) -> Style {
         self.yellow().add_modifier(Modifier::BOLD)
     }
+    /// A single lost probe in the sparkline column on a hop that does answer: plain red, not the
+    /// bold 100 %-loss style (that would visually equate one drop with total loss).
+    pub fn lost_sample(&self) -> Style {
+        self.red()
+    }
 }
 
 #[cfg(test)]
@@ -140,6 +145,13 @@ mod tests {
         assert!(!p.loss(10_000).add_modifier.contains(Modifier::BOLD));
         assert!(p.loss(100_000).add_modifier.contains(Modifier::BOLD));
         assert_eq!(p.loss(100_000).fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn lost_sample_is_plain_red_not_bold() {
+        let p = Palette::new(Depth::Ansi16);
+        assert_eq!(p.lost_sample().fg, Some(Color::Red));
+        assert!(!p.lost_sample().add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
