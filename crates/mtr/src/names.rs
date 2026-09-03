@@ -60,10 +60,12 @@ impl NameCache {
     }
 
     pub fn insert_name(&mut self, ip: IpAddr, name: &str) {
+        self.ptr_pending.remove(&ip);
         self.ptr.insert(ip, Some(name.to_string()));
     }
 
     pub fn insert_asn(&mut self, ip: IpAddr, info: AsnInfo) {
+        self.asn_pending.remove(&ip);
         self.asn.insert(ip, Some(info));
     }
 }
@@ -78,7 +80,7 @@ pub fn addr_name(addr: Option<IpAddr>, names: &NameCache, dns: bool, show_ips: b
     let Some(ip) = addr else {
         return "???".to_string();
     };
-    match names.name(ip).filter(|_| dns) {
+    match names.name(ip).filter(|n| dns && is_useful_hostname(n)) {
         Some(n) if show_ips => format!("{n} ({ip})"),
         Some(n) => n.to_string(),
         None => ip.to_string(),
@@ -156,6 +158,12 @@ mod tests {
             "-n wins over -b"
         );
         assert!(is_useful_hostname("a") && !is_useful_hostname("") && !is_useful_hostname("."));
+        // report.c:70: a useless cached name (empty or ".") falls back to the address
+        c.insert_name(ip("10.0.0.3"), ".");
+        assert_eq!(addr_name(Some(ip("10.0.0.3")), &c, true, false), "10.0.0.3");
+        assert!(c.request_ptr(ip("10.0.0.4")));
+        c.insert_name(ip("10.0.0.4"), "x.example");
+        assert_eq!(c.pending(), 0, "insert_name clears the pending mark");
     }
 
     #[test]
