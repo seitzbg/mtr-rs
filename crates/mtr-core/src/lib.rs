@@ -2,9 +2,15 @@
 //! Ported from ui/net.c and ui/select.c (mtr 0.96, commit 7b01773). GPL-2.0-only.
 #![forbid(unsafe_code)]
 
+pub mod config;
+pub mod history;
+pub mod hop;
 pub mod rng;
 pub mod stats;
 
+pub use config::Config;
+pub use history::{History, Sample};
+pub use hop::{Hop, HopAddr, HopError, Reply};
 pub use rng::Rng;
 pub use stats::RttStats;
 
