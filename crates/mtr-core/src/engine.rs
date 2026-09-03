@@ -5,10 +5,10 @@
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-use mtr_proto::{ProbeParams, ResponseKind};
+use mtr_proto::{ProbeParams, ProbeResult, Protocol, ResponseKind};
 
 use crate::config::Config;
-use crate::hop::Hop;
+use crate::hop::{Hop, HopError, Reply};
 use crate::rng::Rng;
 use crate::{DEFAULT_NUMHOSTS, HISTORY_LEN, MAX_HOST, MAX_SEQUENCE, MIN_PACKET, MIN_SEQUENCE};
 
@@ -60,7 +60,6 @@ pub enum Command {
 
 /// `struct sequence` (net.c:91-96) without its dead `time` field.
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(dead_code)]
 struct SeqSlot {
     hop: u8,
     transit: bool,
@@ -346,22 +345,109 @@ impl Engine {
         });
     }
 
-    fn on_probe(
-        &mut self,
-        _token: i32,
-        _kind: ResponseKind,
-        _now: Instant,
-        _out: &mut Vec<Command>,
-    ) {
-        // Task 10
+    /// `net_process_ping()` (net.c:228-350) plus deviation 1 for `no-reply`.
+    fn on_probe(&mut self, token: i32, kind: ResponseKind, now: Instant, out: &mut Vec<Command>) {
+        let Ok(seq) = usize::try_from(token) else {
+            return;
+        };
+        if seq >= MAX_SEQUENCE as usize {
+            return;
+        }
+        match kind {
+            ResponseKind::Probe {
+                result,
+                addr,
+                rtt_us,
+                mpls,
+            } => {
+                // mark_sequence_complete() (net.c:206-219): duplicate/stale tokens are dropped.
+                let slot = self.seqs[seq];
+                if !slot.transit {
+                    return;
+                }
+                self.seqs[seq].transit = false;
+                let at = usize::from(slot.hop);
+                let err = match result {
+                    ProbeResult::Reply | ProbeResult::TtlExpired => None,
+                    ProbeResult::NoRouteHost => Some(HopError::NoRouteHost),
+                };
+                // net.c:280-293: with dueTTL the target may not be shown at an earlier hop.
+                let due = usize::from(self.cfg.due_ttl);
+                let overwrite_addr = if due > 0 && addr == self.target {
+                    due <= at + 1
+                } else {
+                    true
+                };
+                let new_addr = self.hops[at].record_reply(Reply {
+                    saved_seq: slot.saved_seq,
+                    from: addr,
+                    rtt_us,
+                    mpls: &mpls,
+                    err,
+                    now,
+                    overwrite_addr,
+                    cache: self.cfg.cache_timeout.is_some(),
+                });
+                if new_addr {
+                    out.push(Command::Resolve(addr));
+                }
+            }
+            ResponseKind::NoReply => {
+                let slot = self.seqs[seq];
+                if slot.transit {
+                    self.hops[usize::from(slot.hop)].record_no_reply(slot.saved_seq);
+                }
+                // `transit` deliberately stays set: C never learns about timeouts (cmdpipe.c:768-782).
+            }
+            _ => {} // handshake and error replies belong to the client
+        }
     }
 
     fn on_action(&mut self, a: UserAction) {
         match a {
             UserAction::Pause => self.paused = true,
             UserAction::Resume => self.paused = false,
-            _ => {} // Task 10
+            UserAction::Reset => self.reset(),
+            UserAction::ToggleDns => self.cfg.dns = !self.cfg.dns,
+            UserAction::ToggleMpls => self.cfg.mpls = !self.cfg.mpls,
+            UserAction::ToggleAsn => {
+                if self.cfg.ipinfo_fields.is_empty() {
+                    self.cfg.ipinfo_fields = vec![0];
+                } else {
+                    self.cfg.ipinfo_fields.clear();
+                }
+            }
+            UserAction::SetInterval(ms) => self.cfg.interval = f64::from(ms.max(1)) / 1000.0,
+            UserAction::SetPacketSize(n) => self.cfg.packet_size = n,
+            UserAction::SetBitPattern(n) => self.cfg.bit_pattern = n,
+            UserAction::SetTos(t) => self.cfg.tos = t,
+            UserAction::SetFirstTtl(t) => {
+                self.cfg.first_ttl = t.clamp(1, self.cfg.max_ttl.max(1));
+                self.reset();
+            }
+            UserAction::SetMaxTtl(t) => self.cfg.max_ttl = t.max(self.cfg.first_ttl.max(1)),
+            UserAction::CycleProtocol => {
+                self.cfg.protocol = match self.cfg.protocol {
+                    Protocol::Icmp => Protocol::Udp,
+                    Protocol::Udp => Protocol::Tcp,
+                    Protocol::Tcp | Protocol::Sctp => Protocol::Icmp,
+                };
+                self.reset();
+            }
+            UserAction::SetFields(s) => self.cfg.fields = s,
         }
+    }
+
+    /// `net_reset()` (net.c:843-866): hops and sequence flags are cleared; the token counter is not.
+    pub fn reset(&mut self) {
+        for h in &mut self.hops {
+            h.reset();
+        }
+        for s in &mut self.seqs {
+            s.transit = false;
+        }
+        self.batch_at = self.min_hop();
+        self.numhosts = DEFAULT_NUMHOSTS;
     }
 }
 
@@ -613,5 +699,237 @@ mod tests {
             cmds.contains(&Command::Finished),
             "a NaN grace time collapses to zero"
         );
+    }
+
+    fn probe(token: i32, from: &str, rtt: u32) -> Event {
+        Event::Probe {
+            token,
+            kind: ResponseKind::Probe {
+                result: ProbeResult::TtlExpired,
+                addr: from.parse().unwrap(),
+                rtt_us: rtt,
+                mpls: vec![],
+            },
+        }
+    }
+
+    fn resolves(cmds: &[Command]) -> Vec<IpAddr> {
+        cmds.iter()
+            .filter_map(|c| match c {
+                Command::Resolve(ip) => Some(*ip),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn reply_updates_hop_and_requests_resolution() {
+        let (mut e, t0) = engine(cfg());
+        e.handle(Event::Tick, t0);
+        let cmds = e.handle(
+            probe(33000, "10.0.0.1", 1500),
+            t0 + Duration::from_millis(2),
+        );
+        assert_eq!(resolves(&cmds), vec!["10.0.0.1".parse::<IpAddr>().unwrap()]);
+        let h = &e.hops()[0];
+        assert_eq!(h.addr, Some("10.0.0.1".parse().unwrap()));
+        assert_eq!((h.stats.returned, h.stats.transit, h.last()), (1, 0, 1500));
+        assert!(h.up && !h.outstanding);
+        assert_eq!(h.history.latest(), Some(&crate::Sample::Rtt(1500)));
+    }
+
+    #[test]
+    fn duplicate_late_and_bogus_tokens_are_ignored() {
+        let (mut e, t0) = engine(cfg());
+        e.handle(Event::Tick, t0);
+        e.handle(probe(33000, "10.0.0.1", 1500), t0);
+        let cmds = e.handle(probe(33000, "10.0.0.1", 1500), t0);
+        assert!(resolves(&cmds).is_empty());
+        assert_eq!(e.hops()[0].stats.returned, 1);
+        for bogus in [99, -1, 70_000, i32::MAX] {
+            e.handle(probe(bogus, "10.0.0.2", 1), t0);
+        }
+        assert_eq!(e.hops()[0].stats.returned, 1);
+        assert_eq!(e.hops()[0].addrs.len(), 1);
+    }
+
+    #[test]
+    fn no_reply_marks_history_lost_but_keeps_stats() {
+        let (mut e, t0) = engine(cfg());
+        e.handle(Event::Tick, t0);
+        e.handle(
+            Event::Probe {
+                token: 33000,
+                kind: ResponseKind::NoReply,
+            },
+            t0 + Duration::from_secs(10),
+        );
+        let h = &e.hops()[0];
+        assert_eq!(h.history.latest(), Some(&crate::Sample::Lost));
+        assert_eq!((h.stats.xmit, h.stats.transit, h.stats.returned), (1, 1, 0));
+        // a reply after no-reply is still accepted, as in C (transit was never cleared)
+        e.handle(probe(33000, "10.0.0.1", 5), t0 + Duration::from_secs(11));
+        assert_eq!(e.hops()[0].stats.returned, 1);
+    }
+
+    #[test]
+    fn ecmp_addresses_accumulate_and_resolve_once_each() {
+        let (mut e, t0) = engine(Config {
+            max_ttl: 1,
+            max_ping: 100,
+            ..cfg()
+        });
+        let mut now = t0;
+        let mut all_resolves = Vec::new();
+        for from in ["10.0.0.1", "10.0.0.2", "10.0.0.1"] {
+            let cmds = e.handle(Event::Tick, now);
+            let token = sends(&cmds)[0].0;
+            all_resolves.extend(resolves(&e.handle(probe(token, from, 100), now)));
+            now = wake(&cmds);
+        }
+        let ips: Vec<IpAddr> = ["10.0.0.1", "10.0.0.2"]
+            .iter()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        assert_eq!(all_resolves, ips);
+        assert_eq!(
+            e.hops()[0].addrs.iter().map(|a| a.addr).collect::<Vec<_>>(),
+            ips
+        );
+        assert_eq!(e.hops()[0].addr, Some(ips[0]));
+    }
+
+    #[test]
+    fn due_ttl_hides_an_early_target() {
+        let (mut e, t0) = engine(Config {
+            due_ttl: 3,
+            ..cfg()
+        });
+        e.handle(Event::Tick, t0);
+        e.handle(probe(33000, "192.0.2.10", 100), t0);
+        assert_eq!(e.hops()[0].addr, None);
+        assert_eq!(e.hops()[0].addrs.len(), 1);
+    }
+
+    #[test]
+    fn no_route_host_sets_err_and_caps_display_range() {
+        let (mut e, t0) = engine(cfg());
+        e.handle(Event::Tick, t0);
+        e.handle(
+            Event::Probe {
+                token: 33000,
+                kind: ResponseKind::Probe {
+                    result: ProbeResult::NoRouteHost,
+                    addr: "10.0.0.5".parse().unwrap(),
+                    rtt_us: 7,
+                    mpls: vec![],
+                },
+            },
+            t0,
+        );
+        assert_eq!(e.hops()[0].err, Some(crate::HopError::NoRouteHost));
+        assert_eq!(e.display_range(), 0..1);
+    }
+
+    #[test]
+    fn display_range_follows_net_max() {
+        let (mut e, t0) = engine(cfg());
+        assert_eq!(e.display_range(), 0..0);
+        let mut now = t0;
+        let mut tokens = Vec::new();
+        for _ in 0..3 {
+            let cmds = e.handle(Event::Tick, now);
+            tokens.push(sends(&cmds)[0].0);
+            now = wake(&cmds);
+        }
+        e.handle(probe(tokens[0], "10.0.0.1", 100), now);
+        assert_eq!(e.display_range(), 0..2); // known hop + the pending one after it
+        e.handle(probe(tokens[2], "192.0.2.10", 100), now);
+        assert_eq!(e.display_range(), 0..3);
+    }
+
+    #[test]
+    fn cycles_then_grace_then_finished_with_end_transit() {
+        let (mut e, t0) = engine(Config {
+            max_ttl: 1,
+            max_ping: 1,
+            grace_time: 0.5,
+            ..cfg()
+        });
+        let cmds = e.handle(Event::Tick, t0);
+        assert_eq!(sends(&cmds).len(), 1);
+        assert_eq!(e.cycles_done(), 1);
+        let t1 = wake(&cmds);
+        assert_eq!(t1, t0 + Duration::from_secs(1)); // numhosts is 1 now
+        let cmds = e.handle(Event::Tick, t1);
+        assert!(sends(&cmds).is_empty());
+        assert_eq!(wake(&cmds), t1 + Duration::from_millis(500));
+        let cmds = e.handle(Event::Tick, t1 + Duration::from_millis(500));
+        assert!(cmds.contains(&Command::Finished));
+        assert!(!cmds.iter().any(|c| matches!(c, Command::NextWake(_))));
+        assert!(e.is_finished());
+        assert_eq!(e.hops()[0].stats.transit, 0);
+        assert_eq!(e.hops()[0].loss(), 100_000);
+        assert!(
+            e.handle(Event::Tick, t1 + Duration::from_secs(9))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn interactive_without_c_never_finishes() {
+        let (mut e, t0) = engine(Config {
+            max_ttl: 1,
+            ..Config::default()
+        });
+        let mut now = t0;
+        for _ in 0..30 {
+            let cmds = e.handle(Event::Tick, now);
+            assert!(!cmds.contains(&Command::Finished));
+            now = wake(&cmds);
+        }
+        assert_eq!(e.cycles_done(), 30);
+        let (mut e, t0) = engine(Config {
+            max_ttl: 1,
+            max_ping: 2,
+            force_max_ping: true,
+            ..Config::default()
+        });
+        let mut now = t0;
+        let mut finished = false;
+        for _ in 0..10 {
+            let cmds = e.handle(Event::Tick, now);
+            if cmds.contains(&Command::Finished) {
+                finished = true;
+                break;
+            }
+            now = wake(&cmds);
+        }
+        assert!(finished, "-c makes interactive mode finish");
+    }
+
+    #[test]
+    fn reset_clears_hops_but_keeps_token_counter() {
+        let (mut e, t0) = engine(cfg());
+        e.handle(Event::Tick, t0);
+        e.handle(probe(33000, "10.0.0.1", 100), t0);
+        e.handle(Event::Action(UserAction::Reset), t0);
+        assert!(e.hops()[0].addr.is_none() && e.hops()[0].stats.returned == 0);
+        let cmds = e.handle(Event::Tick, t0 + Duration::from_millis(100));
+        assert_eq!(sends(&cmds)[0].0, 33001);
+        assert_eq!(sends(&cmds)[0].1.ttl, Some(1)); // batch_at went back to fstTTL-1
+    }
+
+    #[test]
+    fn cycle_protocol_and_toggles_update_config() {
+        let (mut e, t0) = engine(cfg());
+        e.handle(Event::Action(UserAction::CycleProtocol), t0);
+        assert_eq!(e.config().protocol, Protocol::Udp);
+        e.handle(Event::Action(UserAction::ToggleAsn), t0);
+        assert_eq!(e.config().ipinfo_fields, vec![0]);
+        e.handle(Event::Action(UserAction::ToggleDns), t0);
+        assert!(!e.config().dns);
+        e.handle(Event::Action(UserAction::SetInterval(250)), t0);
+        assert_eq!(e.config().interval, 0.25);
     }
 }
