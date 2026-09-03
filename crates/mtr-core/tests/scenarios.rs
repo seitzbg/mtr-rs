@@ -16,7 +16,7 @@ fn run_to_finish(
     mut answer: impl FnMut(u8) -> Option<(IpAddr, u32)>,
 ) -> Instant {
     let mut now = t0;
-    loop {
+    for _ in 0..100_000 {
         let cmds = e.handle(Event::Tick, now);
         let mut next = None;
         for c in cmds {
@@ -49,6 +49,7 @@ fn run_to_finish(
         }
         now = next.expect("a running engine always schedules a wake");
     }
+    panic!("engine did not finish within 100000 ticks");
 }
 
 fn three_hop_path(ttl: u8) -> Option<(IpAddr, u32)> {
