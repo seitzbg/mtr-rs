@@ -196,31 +196,26 @@ impl Engine {
     }
 
     fn next_wake(&self, now: Instant) -> Option<Instant> {
-        if self.finished {
+        // select.c:180-191: while paused the whole tick block — grace expiry included — is skipped.
+        if self.finished || self.paused {
             return None;
         }
         if let Some(g) = self.grace_start {
-            return Some(g + Duration::from_secs_f64(self.cfg.grace_time));
-        }
-        if self.paused {
-            return None;
+            return Some(g + secs(self.cfg.grace_time));
         }
         Some(self.next_send.unwrap_or(now))
     }
 
     /// One pass of the select_loop() tick block (select.c:202-227).
     fn tick(&mut self, now: Instant, out: &mut Vec<Command>) {
-        if self.finished {
+        if self.finished || self.paused {
             return;
         }
         if let Some(g) = self.grace_start {
             // Deviation 2: `>=` instead of C's strict `>`.
-            if now.duration_since(g).as_secs_f64() >= self.cfg.grace_time {
+            if now.duration_since(g) >= secs(self.cfg.grace_time) {
                 self.finish(out);
             }
-            return;
-        }
-        if self.paused {
             return;
         }
         if let Some(t) = self.next_send {
@@ -237,7 +232,7 @@ impl Engine {
             self.num_ping += 1;
         }
         // calc_deltatime() (net.c:138-143): WaitTime / numhosts.
-        let dt = Duration::from_secs_f64(self.cfg.interval / f64::from(self.numhosts.max(1)));
+        let dt = secs(self.cfg.interval / f64::from(self.numhosts.max(1)));
         self.next_send = Some(now + dt);
     }
 
@@ -367,6 +362,15 @@ impl Engine {
             UserAction::Resume => self.paused = false,
             _ => {} // Task 10
         }
+    }
+}
+
+/// `Duration::from_secs_f64` without its panics: non-finite or non-positive seconds become zero.
+fn secs(seconds: f64) -> Duration {
+    if seconds.is_finite() && seconds > 0.0 {
+        Duration::from_secs_f64(seconds)
+    } else {
+        Duration::ZERO
     }
 }
 
@@ -563,5 +567,51 @@ mod tests {
         assert_eq!(wake(&cmds), t0 + Duration::from_millis(100)); // overdue: driver ticks at once
         let cmds = e.handle(Event::Tick, t0 + Duration::from_millis(200));
         assert_eq!(sends(&cmds).len(), 1);
+    }
+
+    #[test]
+    fn pause_freezes_the_grace_countdown_like_select_c() {
+        let (mut e, t0) = engine(Config {
+            max_ttl: 1,
+            max_ping: 1,
+            force_max_ping: true,
+            grace_time: 0.5,
+            ..Config::default()
+        });
+        let t1 = wake(&e.handle(Event::Tick, t0)); // batch 1 complete
+        e.handle(Event::Tick, t1); // grace period starts
+        let cmds = e.handle(Event::Action(UserAction::Pause), t1);
+        assert!(!cmds.iter().any(|c| matches!(c, Command::NextWake(_))));
+        let cmds = e.handle(Event::Tick, t1 + Duration::from_secs(5));
+        assert!(
+            !cmds.contains(&Command::Finished),
+            "paused: the grace clock is not consulted"
+        );
+        let cmds = e.handle(
+            Event::Action(UserAction::Resume),
+            t1 + Duration::from_secs(5),
+        );
+        assert_eq!(wake(&cmds), t1 + Duration::from_millis(500));
+        let cmds = e.handle(Event::Tick, t1 + Duration::from_secs(5));
+        assert!(cmds.contains(&Command::Finished));
+    }
+
+    #[test]
+    fn non_positive_timing_values_do_not_panic() {
+        let (mut e, t0) = engine(Config {
+            interval: -1.0,
+            grace_time: f64::NAN,
+            max_ttl: 1,
+            max_ping: 1,
+            ..cfg()
+        });
+        let t1 = wake(&e.handle(Event::Tick, t0));
+        assert_eq!(t1, t0, "a non-positive interval means 'send immediately'");
+        e.handle(Event::Tick, t1); // grace starts
+        let cmds = e.handle(Event::Tick, t1);
+        assert!(
+            cmds.contains(&Command::Finished),
+            "a NaN grace time collapses to zero"
+        );
     }
 }
