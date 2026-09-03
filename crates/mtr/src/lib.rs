@@ -195,12 +195,7 @@ async fn run_target(opts: &Options, t: &Target, af: AddressFamily) -> Result<Tar
         .unwrap_or(1);
     let mut engine = Engine::new(cfg, ip, local, Instant::now(), seed);
     let interrupted = {
-        let mut driver = Driver {
-            engine: &mut engine,
-            helper: &mut helper,
-            resolver: resolver.as_mut(),
-            names: &mut names,
-        };
+        let mut driver = Driver::new(&mut engine, &mut helper, resolver.as_mut(), &mut names);
         let outcome = driver
             .run()
             .await
