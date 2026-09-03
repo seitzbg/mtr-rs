@@ -85,7 +85,14 @@ pub async fn run(argv: Vec<String>) -> i32 {
         print!("{}", cli::version_text(args.version));
         return 0;
     }
-    let cfg_path = config_file::resolve_path(args.config.as_deref());
+    let sudo_guard = helper::sudo_guard_present();
+    let cfg_path = match config_file::config_source(args.config.as_deref(), sudo_guard) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("mtr: {msg}");
+            return 1;
+        }
+    };
     if args.init_config {
         let Some(p) = &cfg_path else {
             eprintln!("mtr: config: no path: set $HOME or $XDG_CONFIG_HOME, or pass --config");
@@ -106,7 +113,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
     // read — the same situation as a file that does not exist.
     if let Some(p) = &cfg_path {
         match config_file::load(p) {
-            Ok(file) => config_file::apply(&mut args, &file),
+            Ok(cfg) => config_file::apply(&mut args, &cfg),
             Err(msg) => {
                 eprintln!("mtr: config: {msg}");
                 return 1;
@@ -114,7 +121,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
         }
     }
     if let Some(file) = args.filename.take() {
-        match options::hosts_from_file_option(&file, helper::sudo_guard_present()) {
+        match options::hosts_from_file_option(&file, sudo_guard) {
             Ok(mut names) => {
                 names.append(&mut args.hosts);
                 args.hosts = names;

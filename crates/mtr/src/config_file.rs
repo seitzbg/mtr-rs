@@ -57,7 +57,7 @@ pub const TEMPLATE: &str = r##"# mtr-rs configuration file — ~/.config/mtr-rs/
 "##;
 
 /// `color = "auto" | "always" | "never"`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum ColorChoice {
     /// Colour unless `NO_COLOR` is set (the built-in behaviour).
@@ -101,11 +101,19 @@ pub struct FileConfig {
     pub probe: ProbeSection,
 }
 
+/// A [`FileConfig`] that has passed [`FileConfig::validate`], carrying the values that needed
+/// parsing to be checked at all — so `apply` never re-parses and never has an error to swallow.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LoadedConfig {
+    pub file: FileConfig,
+    pub rtt_thresholds: Option<RttThresholds>,
+}
+
 impl FileConfig {
     /// The same rules the matching command line flags enforce, applied at load time so a bad file
     /// is reported once, with its path, instead of as a confusing CLI error.
-    pub fn validate(&self) -> Result<(), String> {
-        self.rtt_thresholds()?;
+    pub fn validate(self) -> Result<LoadedConfig, String> {
+        let rtt_thresholds = parse_rtt_thresholds_ms(self.display.rtt_thresholds_ms.as_deref())?;
         if let Some(f) = &self.display.fields {
             mtr_core::fields::validate_fields(f)?;
         }
@@ -127,33 +135,38 @@ impl FileConfig {
         if let Some(u) = self.probe.max_unknown
             && u < 1
         {
-            return Err(format!("value out of range (1 - ...): {u}"));
+            return Err(format!("max_unknown must be at least 1: {u}"));
         }
-        Ok(())
+        Ok(LoadedConfig {
+            file: self,
+            rtt_thresholds,
+        })
     }
+}
 
-    fn rtt_thresholds(&self) -> Result<Option<RttThresholds>, String> {
-        let Some(v) = &self.display.rtt_thresholds_ms else {
-            return Ok(None);
-        };
-        if v.iter().any(|&n| n < 0) {
-            return Err("rtt thresholds must be positive".to_string());
-        }
-        let ms: Vec<u64> = v.iter().map(|&n| n as u64).collect();
-        RttThresholds::from_millis(&ms).map(Some)
+fn parse_rtt_thresholds_ms(v: Option<&[i64]>) -> Result<Option<RttThresholds>, String> {
+    let Some(v) = v else {
+        return Ok(None);
+    };
+    if v.iter().any(|&n| n < 0) {
+        return Err("rtt thresholds must be positive".to_string());
     }
+    let ms: Vec<u64> = v.iter().map(|&n| n as u64).collect();
+    RttThresholds::from_millis(&ms).map(Some)
 }
 
 /// `$XDG_CONFIG_HOME/mtr-rs/config.toml`, else `$HOME/.config/mtr-rs/config.toml`. `None` when
 /// neither variable is usable (an empty or relative `XDG_CONFIG_HOME` is ignored, as the spec
 /// requires).
 pub fn default_path() -> Option<PathBuf> {
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute());
-    let base = match xdg {
+    let abs = |var: &str| {
+        std::env::var_os(var)
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+    };
+    let base = match abs("XDG_CONFIG_HOME") {
         Some(p) => p,
-        None => PathBuf::from(std::env::var_os("HOME").filter(|h| !h.is_empty())?).join(".config"),
+        None => abs("HOME")?.join(".config"),
     };
     Some(base.join("mtr-rs").join("config.toml"))
 }
@@ -166,19 +179,53 @@ pub fn resolve_path(explicit: Option<&str>) -> Option<PathBuf> {
     }
 }
 
+/// Which file to read, guarded by the sudo marker exactly as `-F` is (ui/mtr.c:717-721). Under
+/// sudo the process is root but every input here is chosen by the unprivileged caller: an explicit
+/// `--config` would name any file for a root-privileged read, and `$HOME`/`$XDG_CONFIG_HOME` come
+/// from the same untrusted environment. So refuse the flag and read nothing by default.
+pub fn config_source(
+    explicit: Option<&str>,
+    guard_present: bool,
+) -> Result<Option<PathBuf>, String> {
+    if guard_present {
+        return match explicit {
+            Some(_) => Err("--config is disabled under sudo.".to_string()),
+            None => Ok(None),
+        };
+    }
+    Ok(resolve_path(explicit))
+}
+
 /// An absent file is not an error and yields the all-`None` config; anything else — unreadable,
 /// malformed, or failing validation — is fatal. The returned message is already prefixed with the
 /// path, so callers print `mtr: config: {msg}`.
-pub fn load(path: &Path) -> Result<FileConfig, String> {
+pub fn load(path: &Path) -> Result<LoadedConfig, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(FileConfig::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(LoadedConfig::default()),
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
-    let cfg: FileConfig = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let cfg: FileConfig = toml::from_str(&text)
+        .map_err(|e| format!("{}: {}", path.display(), toml_message(&text, &e)))?;
     cfg.validate()
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(cfg)
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// `toml`'s own `Display` quotes the offending source line. That must never reach the terminal:
+/// the file is named by the caller but read by the process, so echoing it would turn a parse error
+/// into a file-disclosure primitive. Rebuild a single-line message from the error text plus the
+/// location, so nothing from the file itself is printed.
+fn toml_message(text: &str, e: &toml::de::Error) -> String {
+    let Some(span) = e.span() else {
+        return e.message().to_string();
+    };
+    let before = &text[..span.start.min(text.len())];
+    let line = before.matches('\n').count() + 1;
+    let column = before
+        .rsplit('\n')
+        .next()
+        .map_or(1, |l| l.chars().count() + 1);
+    format!("{} at line {line} column {column}", e.message())
 }
 
 /// `--init-config`: create the parent directories and write [`TEMPLATE`], refusing to touch an
@@ -192,9 +239,11 @@ pub fn init(path: &Path) -> Result<(), String> {
         .create_new(true)
         .open(path)
         .map_err(|e| match e.kind() {
-            std::io::ErrorKind::AlreadyExists => {
-                format!("{}: file exists, refusing to overwrite it", path.display())
-            }
+            std::io::ErrorKind::AlreadyExists => format!(
+                "{}: {} exists, refusing to overwrite it",
+                path.display(),
+                if path.is_dir() { "directory" } else { "file" }
+            ),
             _ => format!("{}: {e}", path.display()),
         })?;
     f.write_all(TEMPLATE.as_bytes())
@@ -204,10 +253,11 @@ pub fn init(path: &Path) -> Result<(), String> {
 /// Push the file's values into `args` for every key the command line (or `$MTR_OPTIONS`) left
 /// alone. Called between parsing and [`Args::into_options`], so the file's values then go through
 /// exactly the same validation and conversion as the flags they stand in for.
-pub fn apply(args: &mut Args, file: &FileConfig) {
+pub fn apply(args: &mut Args, cfg: &LoadedConfig) {
+    let file = &cfg.file;
     let unset = |id: &str| !args.cli_set.contains(id);
     if unset("rtt_thresholds")
-        && let Ok(Some(t)) = file.rtt_thresholds()
+        && let Some(t) = cfg.rtt_thresholds
     {
         args.rtt_thresholds = Some(t);
     }
@@ -221,7 +271,9 @@ pub fn apply(args: &mut Args, file: &FileConfig) {
     {
         args.ascii = a;
     }
-    if let Some(c) = file.display.color {
+    if unset("color")
+        && let Some(c) = file.display.color
+    {
         args.color_choice = Some(c);
     }
     if let Some(s) = file.display.sparkline {
@@ -286,7 +338,7 @@ mod tests {
         r
     }
 
-    fn parse(text: &str) -> Result<FileConfig, String> {
+    fn parse(text: &str) -> Result<LoadedConfig, String> {
         with_file(text, |path| {
             load(path).map_err(|e| e.replace(&format!("{}: ", path.display()), ""))
         })
@@ -403,6 +455,45 @@ asn = true
             .color
         );
         assert!(opts("[display]\ncolor = \"always\"\n", None, &["h"]).color);
+        // …and `--color` can undo the file in either direction, which `--no-color` alone cannot
+        let never = "[display]\ncolor = \"never\"\n";
+        let always = "[display]\ncolor = \"always\"\n";
+        assert!(opts(never, None, &["--color", "always", "h"]).color);
+        assert!(!opts(always, None, &["--color", "never", "h"]).color);
+        assert!(opts(never, Some("--color always"), &["h"]).color);
+        // an explicit `--color` beats a `--no-color` given alongside it
+        assert!(opts("", None, &["--no-color", "--color", "always", "h"]).color);
+    }
+
+    #[test]
+    fn the_sudo_guard_disables_config_the_way_it_disables_dash_f() {
+        // no guard: both the flag and the environment-derived default are honoured
+        assert_eq!(
+            config_source(Some("/tmp/x.toml"), false).unwrap(),
+            Some(PathBuf::from("/tmp/x.toml"))
+        );
+        assert_eq!(config_source(None, false).unwrap(), default_path());
+        // guard present: the flag is refused outright and nothing is read by default — the process
+        // is root, but `--config`, `$HOME` and `$XDG_CONFIG_HOME` all come from the caller
+        assert_eq!(
+            config_source(Some("/etc/shadow"), true).unwrap_err(),
+            "--config is disabled under sudo."
+        );
+        assert_eq!(config_source(None, true).unwrap(), None);
+    }
+
+    #[test]
+    fn parse_errors_never_echo_the_files_own_bytes() {
+        let secret = "root:$6$super-secret-hash:19000:0:99999:7:::\n";
+        let err = parse(secret).unwrap_err();
+        assert!(!err.contains("secret"), "{err}");
+        assert!(!err.contains("19000"), "{err}");
+        assert_eq!(err.lines().count(), 1, "{err}");
+        assert!(err.contains("at line 1 column "), "{err}");
+        // the location still points at the right line of a multi-line file
+        let err = parse("[display]\nascii = true\nnope\n").unwrap_err();
+        assert!(err.contains("at line 3 column "), "{err}");
+        assert_eq!(err.lines().count(), 1, "{err}");
     }
 
     #[test]
@@ -426,40 +517,46 @@ asn = true
 "#,
         )
         .unwrap();
-        assert_eq!(cfg.display.rtt_thresholds_ms, Some(vec![5, 10, 20, 40]));
-        assert_eq!(cfg.display.fields.as_deref(), Some("LSNB"));
-        assert_eq!(cfg.display.ascii, Some(true));
-        assert_eq!(cfg.display.color, Some(ColorChoice::Never));
-        assert_eq!(cfg.display.sparkline, Some(false));
-        assert_eq!(cfg.display.detail_pane, Some(false));
-        assert_eq!(cfg.probe.interval, Some(2.5));
-        assert_eq!(cfg.probe.max_ttl, Some(20));
-        assert_eq!(cfg.probe.max_unknown, Some(3));
-        assert_eq!(cfg.probe.timeout, Some(7));
-        assert_eq!(cfg.probe.dns, Some(false));
-        assert_eq!(cfg.probe.asn, Some(true));
+        assert_eq!(cfg.rtt_thresholds.unwrap().to_millis(), [5, 10, 20, 40]);
+        let (d, pr) = (&cfg.file.display, &cfg.file.probe);
+        assert_eq!(d.rtt_thresholds_ms, Some(vec![5, 10, 20, 40]));
+        assert_eq!(d.fields.as_deref(), Some("LSNB"));
+        assert_eq!(d.ascii, Some(true));
+        assert_eq!(d.color, Some(ColorChoice::Never));
+        assert_eq!(d.sparkline, Some(false));
+        assert_eq!(d.detail_pane, Some(false));
+        assert_eq!(pr.interval, Some(2.5));
+        assert_eq!(pr.max_ttl, Some(20));
+        assert_eq!(pr.max_unknown, Some(3));
+        assert_eq!(pr.timeout, Some(7));
+        assert_eq!(pr.dns, Some(false));
+        assert_eq!(pr.asn, Some(true));
     }
 
     #[test]
     fn a_partial_file_leaves_the_other_keys_unset() {
         let cfg = parse("[probe]\ninterval = 2.0\n").unwrap();
-        assert_eq!(cfg.probe.interval, Some(2.0));
-        assert_eq!(cfg.probe.max_ttl, None);
-        assert_eq!(cfg.display, DisplaySection::default());
-        assert_eq!(parse("").unwrap(), FileConfig::default());
+        assert_eq!(cfg.file.probe.interval, Some(2.0));
+        assert_eq!(cfg.file.probe.max_ttl, None);
+        assert_eq!(cfg.file.display, DisplaySection::default());
+        assert_eq!(parse("").unwrap(), LoadedConfig::default());
     }
 
     #[test]
     fn a_missing_file_is_not_an_error() {
         assert_eq!(
             load(Path::new("/nonexistent/mtr-rs/config.toml")).unwrap(),
-            FileConfig::default()
+            LoadedConfig::default()
         );
     }
 
     #[test]
     fn malformed_and_invalid_files_are_errors() {
-        assert!(parse("[display\nascii = true\n").unwrap_err().contains('['));
+        assert!(
+            parse("[display\nascii = true\n")
+                .unwrap_err()
+                .contains("at line 1")
+        );
         assert_eq!(
             parse("[display]\nfields = \"LSQ\"\n").unwrap_err(),
             "Unknown field identifier: Q"
@@ -512,7 +609,7 @@ asn = true
     #[test]
     fn the_template_parses_to_the_built_in_defaults() {
         // Every key is commented out, so the written file is valid TOML that changes nothing …
-        assert_eq!(parse(TEMPLATE).unwrap(), FileConfig::default());
+        assert_eq!(parse(TEMPLATE).unwrap(), LoadedConfig::default());
         // … and uncommenting every key yields exactly the documented defaults.
         let all: String = TEMPLATE
             .lines()
@@ -524,10 +621,10 @@ asn = true
             .collect::<Vec<_>>()
             .join("\n");
         let cfg = parse(&all).unwrap();
-        assert_eq!(cfg.display.rtt_thresholds_ms, Some(vec![30, 100, 200, 500]));
-        assert_eq!(cfg.display.fields.as_deref(), Some("LS NABWV"));
-        assert_eq!(cfg.display.color, Some(ColorChoice::Auto));
-        assert_eq!(cfg.probe.interval, Some(1.0));
+        assert_eq!(cfg.rtt_thresholds, Some(RttThresholds::default()));
+        assert_eq!(cfg.file.display.fields.as_deref(), Some("LS NABWV"));
+        assert_eq!(cfg.file.display.color, Some(ColorChoice::Auto));
+        assert_eq!(cfg.file.probe.interval, Some(1.0));
         let o = with_file(&all, |path| {
             let mut a = Args::parse_argv(vec!["mtr".to_string(), "h".to_string()]).unwrap();
             apply(&mut a, &load(path).unwrap());
@@ -554,7 +651,7 @@ asn = true
             format!("{}: file exists, refusing to overwrite it", path.display())
         );
         // the round trip: what init wrote loads cleanly
-        assert_eq!(load(&path).unwrap(), FileConfig::default());
+        assert_eq!(load(&path).unwrap(), LoadedConfig::default());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

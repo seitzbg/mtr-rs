@@ -51,9 +51,12 @@ The file only supplies defaults. Precedence, lowest to highest:
     dns = true                               # false is -n
     asn = false                              # true is -z
 
-Every key is optional. An absent file is normal; an unreadable or malformed one is a fatal
-`mtr: config: <path>: <error>`. `docs/config.example.toml` is the same content `--init-config`
-writes. `--rtt-thresholds 30,100,200,500` sets the colour ramp for a single run.
+Every key is optional, but the file is strict: an unknown key (or an unknown `color` value) is an
+error, so a typo is reported rather than silently ignored. An absent file is normal; an unreadable
+or malformed one is a fatal `mtr: config: <path>: <error>`. Under sudo `--config` is refused and
+the default path is not read, the same way `-F` is disabled. `docs/config.example.toml` is the
+same content `--init-config` writes. For a single run, `--rtt-thresholds 30,100,200,500` sets the
+colour ramp and `--color auto|always|never` overrides `display.color`.
 
 ## Development
 

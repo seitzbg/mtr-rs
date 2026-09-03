@@ -252,3 +252,99 @@ fn init_config_creates_missing_parent_directories() {
     assert!(path.is_file());
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A private `$XDG_CONFIG_HOME`, so these tests exercise the *default* path resolution rather
+/// than `--config`.
+fn temp_xdg(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("mtr-rs-cli-xdg-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn init_config_uses_the_xdg_default_path_when_no_config_flag_is_given() {
+    let xdg = temp_xdg("init");
+    let expected = xdg.join("mtr-rs").join("config.toml");
+    let o = mtr()
+        .env("XDG_CONFIG_HOME", &xdg)
+        .arg("--init-config")
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0), "{:?}", o.stderr);
+    assert_eq!(
+        String::from_utf8_lossy(&o.stdout),
+        format!("{}\n", expected.display())
+    );
+    assert_eq!(
+        std::fs::read_to_string(&expected).unwrap(),
+        include_str!("../../../docs/config.example.toml")
+    );
+    std::fs::remove_dir_all(&xdg).unwrap();
+}
+
+#[test]
+fn the_xdg_default_config_is_read_without_a_config_flag() {
+    let xdg = temp_xdg("read");
+    let path = xdg.join("mtr-rs").join("config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "[display]\nfields = \"LS\"\n").unwrap();
+    let o = mtr()
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env(
+            "MTR_PACKET",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-mtr-packet.py"),
+        )
+        .args(["-r", "-n", "-c", "1", "-G", "0.2", "192.0.2.1"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert_eq!(o.status.code(), Some(0), "{out}");
+    // `fields = "LS"` from the file: Loss% and Snt, and none of the default's later columns
+    let header = out.lines().find(|l| l.starts_with("HOST:")).unwrap();
+    assert!(header.ends_with("Loss%   Snt"), "{header}");
+    std::fs::remove_dir_all(&xdg).unwrap();
+}
+
+#[test]
+fn a_bad_default_config_is_fatal_too() {
+    let xdg = temp_xdg("bad");
+    let path = xdg.join("mtr-rs").join("config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "[probe]\nmax_ttl = 0\n").unwrap();
+    let o = mtr()
+        .env("XDG_CONFIG_HOME", &xdg)
+        .args(["-r", "127.0.0.1"])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(1), "{err}");
+    assert!(
+        err.contains(&format!(
+            "mtr: config: {}: value out of range (1 - 255): 0",
+            path.display()
+        )),
+        "{err}"
+    );
+    std::fs::remove_dir_all(&xdg).unwrap();
+}
+
+#[test]
+fn color_never_in_the_file_can_be_overridden_from_the_command_line() {
+    // `--color`'s effect is not observable in report mode, so assert the flags parse and that the
+    // run still gets as far as resolution — the merge itself is unit-tested in config_file.
+    let path = temp_config("color", "[display]\ncolor = \"never\"\n");
+    let (_, _, err) = run(&[
+        "--config",
+        path.to_str().unwrap(),
+        "--color",
+        "always",
+        "-r",
+        "no-such-host.invalid",
+    ]);
+    assert!(err.contains("Failed to resolve host"), "{err}");
+    let (code, _, err) = run(&["--color", "sometimes", "-r", "127.0.0.1"]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains("invalid value 'sometimes'"), "{err}");
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}

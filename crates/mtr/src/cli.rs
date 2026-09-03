@@ -316,9 +316,12 @@ pub struct Args {
     /// Use ASCII glyphs and borders in the TUI
     #[arg(long = "ascii")]
     pub ascii: bool,
-    /// Disable colour in the TUI (NO_COLOR is honoured too)
+    /// Disable colour in the TUI; the same as --color never
     #[arg(long = "no-color")]
     pub no_color: bool,
+    /// When to colour the TUI (auto honours NO_COLOR, always ignores it)
+    #[arg(long = "color", value_name = "WHEN", value_enum)]
+    pub color: Option<ColorChoice>,
     /// RTT colour ramp bounds in milliseconds (green,yellow,magenta,red)
     #[arg(
         long = "rtt-thresholds",
@@ -343,7 +346,8 @@ pub struct Args {
     /// fills the ids that are *not* listed here.
     #[arg(skip)]
     pub cli_set: std::collections::BTreeSet<String>,
-    /// `display.color`; file-only, so there is no flag to parse it from.
+    /// `display.color`. Only the config file writes it; `--color` lands in `color` above and
+    /// wins, and `config_file::apply` leaves this `None` when `--color` was given.
     #[arg(skip)]
     pub color_choice: Option<ColorChoice>,
     /// `display.sparkline`: the Recent column shown when the TUI starts (default on).
@@ -569,11 +573,16 @@ impl Args {
             ipinfo_provider4: self.ipinfo_provider4.clone(),
             ipinfo_provider6: self.ipinfo_provider6.clone(),
             ascii: self.ascii,
-            // `--no-color` (or `$MTR_OPTIONS`) beats the file; `always` beats `NO_COLOR`.
-            color: match (self.no_color, self.color_choice.unwrap_or_default()) {
-                (true, _) | (false, ColorChoice::Never) => false,
-                (false, ColorChoice::Always) => true,
-                (false, ColorChoice::Auto) => std::env::var_os("NO_COLOR").is_none(),
+            // `--color` wins, then `--no-color` (an alias for `--color never`), then the file;
+            // `always` is the only setting that overrides `NO_COLOR`.
+            color: match match (self.color, self.no_color) {
+                (Some(c), _) => c,
+                (None, true) => ColorChoice::Never,
+                (None, false) => self.color_choice.unwrap_or_default(),
+            } {
+                ColorChoice::Never => false,
+                ColorChoice::Always => true,
+                ColorChoice::Auto => std::env::var_os("NO_COLOR").is_none(),
             },
             rtt_thresholds: self.rtt_thresholds.unwrap_or_default(),
             sparkline: self.sparkline,
