@@ -4,7 +4,7 @@
 use std::net::IpAddr;
 use std::time::Instant;
 
-use mtr_proto::MplsLabel;
+use mtr_proto::{MplsLabel, ProbeResult};
 
 use crate::MAX_PATH;
 use crate::history::{History, Sample};
@@ -48,6 +48,7 @@ pub struct Reply<'a> {
     pub from: IpAddr,
     pub rtt_us: u32,
     pub mpls: &'a [MplsLabel],
+    pub result: ProbeResult,
     pub err: Option<HopError>,
     pub now: Instant,
     /// net.c:280-293: false only when `dueTTL` forbids showing the target at this hop.
@@ -134,7 +135,8 @@ impl Hop {
         if r.cache {
             self.seen = Some(r.now);
         }
-        self.history.record(r.saved_seq, Sample::Rtt(r.rtt_us));
+        self.history
+            .record_outcome(r.saved_seq, Sample::Rtt(r.rtt_us), Some(r.result), r.mpls);
         new_addr
     }
 
@@ -209,6 +211,7 @@ mod tests {
             from: ip(from),
             rtt_us,
             mpls: &[],
+            result: ProbeResult::TtlExpired,
             err: None,
             now,
             overwrite_addr: true,
@@ -245,6 +248,8 @@ mod tests {
         assert_eq!((h.stats.returned, h.stats.transit, h.last()), (1, 0, 1500));
         assert_eq!(h.history.latest(), Some(&Sample::Rtt(1500)));
         assert_eq!(h.seen, None);
+        let e = h.history.latest_entry().unwrap();
+        assert_eq!((e.result, e.seq), (Some(ProbeResult::TtlExpired), seq));
     }
 
     #[test]
