@@ -3,12 +3,14 @@
 #![forbid(unsafe_code)]
 
 pub mod config;
+pub mod fields;
 pub mod history;
 pub mod hop;
 pub mod rng;
 pub mod stats;
 
 pub use config::Config;
+pub use fields::{FIELDS, Field, FieldFormat};
 pub use history::{History, Sample};
 pub use hop::{Hop, HopAddr, HopError, Reply};
 pub use rng::Rng;
