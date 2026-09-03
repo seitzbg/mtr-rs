@@ -37,7 +37,7 @@ pub struct ChartData {
     pub ceiling: f64,
 }
 
-pub fn chart_points(hop: &Hop, columns: usize, now: Instant) -> ChartData {
+pub fn chart_points(hop: &Hop, columns: usize, now: Instant, interval_s: f64) -> ChartData {
     let n = columns * 2;
     let entries: Vec<_> = hop.history.entries().collect();
     let skip = entries.len().saturating_sub(n);
@@ -58,10 +58,14 @@ pub fn chart_points(hop: &Hop, columns: usize, now: Instant) -> ChartData {
             Sample::Pending { .. } => {}
         }
     }
+    // The window is right-anchored (newest sample in the last column); when history is shorter
+    // than the window, `offset` empty slots sit to its left. The left label should describe the
+    // whole window's age, not just the oldest sample's, so add back the time those empty slots
+    // represent.
     let span_s = window
         .first()
-        .map(|e| now.saturating_duration_since(e.sent).as_secs_f64())
-        .unwrap_or(0.0);
+        .map_or(0.0, |e| now.saturating_duration_since(e.sent).as_secs_f64())
+        + (offset as f64) * interval_s;
     ChartData {
         points,
         lost_columns,
@@ -152,13 +156,14 @@ fn render_rtt(view: &View, hop: &Hop, inner: Rect, buf: &mut Buffer) {
     // The label column width depends on the ceiling, the ceiling on the window, the window on the
     // column count: start from the hop's worst RTT, then settle on the window's own ceiling so the
     // loss row below is offset by exactly the labels the axis prints.
+    let interval_s = view.engine.config().interval;
     let mut label_w = y_label_width(nice_ceiling(f64::from(hop.worst()) / 1000.0));
     let mut columns = usize::from(chart_area.width.saturating_sub(label_w)).max(1);
-    let mut data = chart_points(hop, columns, view.now);
+    let mut data = chart_points(hop, columns, view.now, interval_s);
     if y_label_width(data.ceiling) != label_w {
         label_w = y_label_width(data.ceiling);
         columns = usize::from(chart_area.width.saturating_sub(label_w)).max(1);
-        data = chart_points(hop, columns, view.now);
+        data = chart_points(hop, columns, view.now, interval_s);
     }
     let label_w = y_label_width(data.ceiling);
     let pal = view.palette;
@@ -412,8 +417,9 @@ mod tests {
     #[test]
     fn chart_points_take_two_samples_per_column_and_flag_lost_columns() {
         let f = view_fixture();
+        let interval_s = f.engine.config().interval;
         let hop = &f.engine.hops()[1]; // all lost
-        let d = chart_points(hop, 10, f.now);
+        let d = chart_points(hop, 10, f.now, interval_s);
         assert!(d.points.is_empty());
         assert_eq!(d.lost_columns.len(), 10);
         assert!(
@@ -422,10 +428,35 @@ mod tests {
         );
         assert!(!d.lost_columns[8] && !d.lost_columns[0]);
         let hop = &f.engine.hops()[0]; // two replies at 0.5 ms
-        let d = chart_points(hop, 10, f.now);
+        let d = chart_points(hop, 10, f.now, interval_s);
         assert_eq!(d.points, vec![(18.0, 0.5), (19.0, 0.5)]);
         assert_eq!(d.ceiling, 1.0);
         assert!(d.lost_columns.iter().all(|l| !l));
+    }
+
+    /// With only 3 hops' worth of samples on a wide pane, most of the window is padding: the
+    /// left label must describe the whole window's age, not the oldest sample's, so it comes out
+    /// far larger than `span_s` would be if it only covered the real samples.
+    #[test]
+    fn chart_span_covers_the_whole_window_not_just_the_oldest_sample() {
+        let f = view_fixture();
+        let interval_s = f.engine.config().interval;
+        let hop = &f.engine.hops()[0]; // two replies at 0.5 ms, nothing else
+        let columns = 100; // window = 200 slots, only 2 filled
+        let d = chart_points(hop, columns, f.now, interval_s);
+        let oldest_age = hop
+            .history
+            .entries()
+            .next()
+            .map(|e| f.now.saturating_duration_since(e.sent).as_secs_f64())
+            .unwrap();
+        let padding = (columns * 2 - hop.history.entries().count()) as f64;
+        assert_eq!(d.span_s, oldest_age + padding * interval_s);
+        assert!(
+            d.span_s > oldest_age * 10.0,
+            "span_s ({}) should be much larger than the oldest sample's age ({oldest_age})",
+            d.span_s
+        );
     }
 
     #[test]
