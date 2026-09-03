@@ -141,7 +141,7 @@ pub fn columns(view: &View, width: usize) -> Columns {
     }
 }
 
-fn stat_spans(view: &View, hop: &mtr_core::Hop, scale: &Scale) -> Vec<Span<'static>> {
+fn stat_spans(view: &View, hop: &mtr_core::Hop) -> Vec<Span<'static>> {
     let cfg = view.engine.config();
     active_fields(&cfg.fields)
         .into_iter()
@@ -150,7 +150,7 @@ fn stat_spans(view: &View, hop: &mtr_core::Hop, scale: &Scale) -> Vec<Span<'stat
             let style = match f.format {
                 FieldFormat::Percent => view.palette.loss(v),
                 FieldFormat::Ms5 | FieldFormat::Ms4 if hop.received() > 0 => {
-                    view.palette.bucket(scale.bucket(v.max(0) as u32))
+                    view.palette.rtt(v.max(0) as u32)
                 }
                 _ => Style::new(),
             };
@@ -223,12 +223,12 @@ pub fn render(view: &View, area: Rect, buf: &mut Buffer) {
                     pad_right(truncate_to(&name, cols.host), cols.host),
                     name_style,
                 ));
-                spans.extend(stat_spans(view, hop, &scale));
+                spans.extend(stat_spans(view, hop));
                 if cols.spark > 0 {
                     spans.push(Span::raw(" "));
                     for c in cells(&hop.history, cols.spark, &scale) {
                         let style = match c {
-                            crate::tui::render::sparkline::Cell::Rtt(b) => pal.bucket(b),
+                            crate::tui::render::sparkline::Cell::Rtt(_, us) => pal.rtt(us),
                             crate::tui::render::sparkline::Cell::Lost => pal.loss(100_000),
                             crate::tui::render::sparkline::Cell::Pending => Style::new(),
                         };

@@ -56,7 +56,9 @@ impl Scale {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cell {
-    Rtt(usize),
+    /// Bar height bucket (relative, `Scale::bucket`) and the sample's raw RTT in microseconds
+    /// (for `Palette::rtt`'s absolute colour — deviation 25).
+    Rtt(usize, u32),
     Lost,
     Pending,
 }
@@ -68,7 +70,7 @@ pub fn cells(history: &History, width: usize, scale: &Scale) -> Vec<Cell> {
     let mut out = Vec::with_capacity(width);
     out.resize(width.saturating_sub(n), Cell::Pending);
     out.extend(history.iter().skip(skip).map(|s| match s {
-        Sample::Rtt(us) => Cell::Rtt(scale.bucket(*us)),
+        Sample::Rtt(us) => Cell::Rtt(scale.bucket(*us), *us),
         Sample::Lost => Cell::Lost,
         Sample::Pending { .. } => Cell::Pending,
     }));
@@ -77,7 +79,7 @@ pub fn cells(history: &History, width: usize, scale: &Scale) -> Vec<Cell> {
 
 pub fn glyph(cell: &Cell, g: &Glyphs) -> &'static str {
     match cell {
-        Cell::Rtt(b) => g.bars[(*b).min(BUCKETS - 1)],
+        Cell::Rtt(b, _) => g.bars[(*b).min(BUCKETS - 1)],
         Cell::Lost => g.loss,
         Cell::Pending => g.pending,
     }
@@ -155,18 +157,18 @@ mod tests {
             vec![
                 Cell::Pending,
                 Cell::Pending,
-                Cell::Rtt(0),
+                Cell::Rtt(0, 0),
                 Cell::Lost,
-                Cell::Rtt(7)
+                Cell::Rtt(7, 8000)
             ]
         );
         let c = cells(&h.history, 2, &s);
         assert_eq!(
             c,
-            vec![Cell::Lost, Cell::Rtt(7)],
+            vec![Cell::Lost, Cell::Rtt(7, 8000)],
             "only the newest `width` samples"
         );
-        assert_eq!(glyph(&Cell::Rtt(7), &UNICODE), "█");
+        assert_eq!(glyph(&Cell::Rtt(7, 8000), &UNICODE), "█");
         assert_eq!(glyph(&Cell::Lost, &UNICODE), "░");
         assert_eq!(glyph(&Cell::Lost, &ASCII), "x");
         assert_eq!(glyph(&Cell::Pending, &ASCII), " ");
