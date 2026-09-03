@@ -144,7 +144,8 @@ pub async fn run(argv: Vec<String>) -> i32 {
             }
             Err(Fatal::Abort(msg)) => {
                 eprintln!("mtr: {msg}");
-                if msg.contains("permission denied") {
+                if msg == helper::fatal_message(&mtr_proto::ResponseKind::PermissionDenied).unwrap()
+                {
                     eprintln!("mtr: hint: sudo setcap cap_net_raw+ep \"$(command -v mtr-packet)\"");
                 }
                 return 1;
