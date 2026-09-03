@@ -3,9 +3,9 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mtr_core::fields::{AVAILABLE_OPTIONS, validate_fields};
-use mtr_core::{Config, MAX_PACKET, MIN_PACKET, UserAction};
+use mtr_core::{Config, UserAction};
 
-use crate::cli::parse_c_long;
+use crate::cli::{packet_size_in_range, parse_c_long};
 use crate::tui::protocol_name;
 use crate::tui::state::{Prompt, PromptKind, Quit, UiAction, UiState};
 
@@ -98,9 +98,7 @@ pub fn parse_prompt(
     match kind {
         PromptKind::PacketSize => {
             let n = parse_c_long(text)?;
-            if n.abs() < i64::from(MIN_PACKET) || n.abs() > i64::from(MAX_PACKET) {
-                return Err(format!("value out of range ({MIN_PACKET} - {MAX_PACKET})"));
-            }
+            packet_size_in_range(n)?;
             Ok(UserAction::SetPacketSize(n as i32))
         }
         PromptKind::BitPattern => {
@@ -358,6 +356,22 @@ mod tests {
         );
         assert_eq!(
             p(PromptKind::PacketSize, "10"),
+            Err("value out of range (28 - 65535)".into())
+        );
+        // `parse_c_long` parses the digits as a positive i64 before negating, so it already
+        // rejects a magnitude of 2^63 (`i64::from_str_radix` can't represent it) — meaning
+        // `packet_size_in_range` never actually sees `i64::MIN` through this path today. It's
+        // still an end-to-end proof that this exact 20-char (MAX_PROMPT_LEN) input errors
+        // cleanly rather than panicking.
+        assert_eq!(
+            p(PromptKind::PacketSize, "-9223372036854775808"),
+            Err("invalid argument: '-9223372036854775808'".into())
+        );
+        // The real regression test for the `n.abs()` overflow: call the range check directly
+        // with `i64::MIN`, which `n.abs()` cannot represent and would have panicked (debug) or
+        // silently misbehaved (release) on.
+        assert_eq!(
+            crate::cli::packet_size_in_range(i64::MIN),
             Err("value out of range (28 - 65535)".into())
         );
         assert_eq!(

@@ -106,7 +106,9 @@ where
                     let now = Instant::now();
                     match map_key(k, &ui) {
                         Input::Engine(a) => {
-                            driver.step(Wake::Action(a.clone())).await?;
+                            if driver.step(Wake::Action(a.clone())).await?.finished {
+                                return Ok(TuiOutcome { interrupted: false });
+                            }
                             if let Some(s) = toggle_status(&a, driver.engine.config()) {
                                 ui.set_status(s, now);
                             }
@@ -114,7 +116,11 @@ where
                         Input::Ui(a) => {
                             if let Some(sub) = ui.apply(a, &b, now) {
                                 match parse_prompt(sub.kind, &sub.text, driver.engine.config(), opts.is_root) {
-                                    Ok(a) => { driver.step(Wake::Action(a)).await?; }
+                                    Ok(a) => {
+                                        if driver.step(Wake::Action(a)).await?.finished {
+                                            return Ok(TuiOutcome { interrupted: false });
+                                        }
+                                    }
                                     Err(msg) => ui.set_status(msg, now),
                                 }
                             }

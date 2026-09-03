@@ -117,11 +117,9 @@ async fn lookup_txt(resolver: &TokioResolver, qname: &str) -> Option<String> {
 /// Origin AS record, then the AS name (spec §7.2). A failed origin lookup becomes `???`, which C
 /// also caches after a failed `res_query()` (asn.c:197-201); a failed name lookup leaves `name: None`.
 pub async fn lookup_asn(resolver: &TokioResolver, cfg: &ResolverConfig, ip: IpAddr) -> AsnInfo {
-    let provider = if ip.is_ipv6() {
-        &cfg.provider6
-    } else {
-        &cfg.provider4
-    };
+    // Deviation: the AS-name zone must match the provider `query_name` actually used, not
+    // `ip.is_ipv6()` — a NAT64 address folds to the IPv4 zone (asn.c:329-332, 409-419).
+    let provider = asn::query_provider(ip, &cfg.provider4, &cfg.provider6);
     let qname = asn::query_name(ip, &cfg.provider4, &cfg.provider6);
     let mut info = lookup_txt(resolver, &qname)
         .await

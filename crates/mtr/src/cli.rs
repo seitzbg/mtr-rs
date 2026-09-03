@@ -58,6 +58,17 @@ pub fn parse_c_long(s: &str) -> Result<i64, String> {
     Ok(if neg { -v } else { v })
 }
 
+/// Shared by the CLI's `-s` and the TUI's PacketSize prompt: `n.abs()` panics/wraps for
+/// `i64::MIN`, so use `unsigned_abs()` — which handles the full `i64` range, including
+/// `i64::MIN` — for the magnitude comparison instead.
+pub fn packet_size_in_range(n: i64) -> Result<(), String> {
+    let mag = n.unsigned_abs();
+    if mag < u64::from(MIN_PACKET.unsigned_abs()) || mag > u64::from(MAX_PACKET.unsigned_abs()) {
+        return Err(format!("value out of range ({MIN_PACKET} - {MAX_PACKET})"));
+    }
+    Ok(())
+}
+
 fn parse_port(s: &str) -> Result<u16, String> {
     let n = parse_c_long(s)?;
     if !(1..=65535).contains(&n) {
@@ -365,9 +376,7 @@ impl Args {
             (false, true) => AddressFamily::V6,
             (false, false) => AddressFamily::Unspec,
         };
-        if self.psize.abs() < i64::from(MIN_PACKET) || self.psize.abs() > i64::from(MAX_PACKET) {
-            return Err(format!("value out of range ({MIN_PACKET} - {MAX_PACKET})"));
-        }
+        packet_size_in_range(self.psize)?;
         if !(-1..=255).contains(&self.bitpattern) {
             return Err(format!(
                 "value out of range (-1 - 255): {}",
@@ -907,6 +916,26 @@ mod tests {
             opts(&["-s", "-100", "-B", "-1", "h"])
                 .map(|o| (o.config.packet_size, o.config.bit_pattern)),
             Ok((-100, -1))
+        );
+    }
+
+    #[test]
+    fn packet_size_i64_min_does_not_panic_on_abs() {
+        // `-s`'s value_parser is `parse_c_long`, which parses the digits as a positive i64
+        // before negating, so it already rejects a magnitude of 2^63 (clap surfaces this as a
+        // parse error) and never hands `into_options` an actual `i64::MIN` through the CLI —
+        // but this is still an end-to-end proof that the extreme value errors cleanly instead
+        // of panicking.
+        assert!(
+            Args::try_parse_from(["mtr", "-s", "-9223372036854775808", "h"]).is_err(),
+            "clap rejects the value at parse time, not a panic"
+        );
+        // The real regression test for the `n.abs()` overflow fix: `i64::MIN` itself, which
+        // `n.abs()` cannot represent and would have panicked (debug) or silently misbehaved
+        // (release) on.
+        assert_eq!(
+            packet_size_in_range(i64::MIN),
+            Err("value out of range (28 - 65535)".to_string())
         );
     }
 }

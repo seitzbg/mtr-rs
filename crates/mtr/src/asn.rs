@@ -35,26 +35,51 @@ impl AsnInfo {
     }
 }
 
+/// Whether `query_name` will address `ip` via the IPv4 zone: true for a real IPv4 address, or a
+/// `64:ff9b::/96` (NAT64) address that folds to its embedded IPv4 address (asn.c:329-332, 409-419).
+pub fn uses_ipv4_zone(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(_) => true,
+        IpAddr::V6(v6) => {
+            let b = v6.octets();
+            b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b
+        }
+    }
+}
+
 /// asn.c:394-439: reversed dotted quad, or the top 64 bits nibble-reversed, plus the zone;
 /// `64:ff9b::/32` (NAT64) folds to the embedded IPv4 address (asn.c:329-332, 409-419).
 pub fn query_name(ip: IpAddr, provider4: &str, provider6: &str) -> String {
-    match ip {
-        IpAddr::V4(v4) => {
-            let o = v4.octets();
-            format!("{}.{}.{}.{}.{}", o[3], o[2], o[1], o[0], provider4)
-        }
-        IpAddr::V6(v6) => {
-            let b = v6.octets();
-            if b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b {
-                return format!("{}.{}.{}.{}.{}", b[15], b[14], b[13], b[12], provider4);
+    if uses_ipv4_zone(ip) {
+        let o = match ip {
+            IpAddr::V4(v4) => v4.octets(),
+            IpAddr::V6(v6) => {
+                let b = v6.octets();
+                [b[12], b[13], b[14], b[15]]
             }
-            let mut key = String::with_capacity(32);
-            for byte in b[..8].iter().rev() {
-                key.push_str(&format!("{:x}.{:x}.", byte & 0xf, byte >> 4));
-            }
-            key.pop();
-            format!("{key}.{provider6}")
-        }
+        };
+        return format!("{}.{}.{}.{}.{}", o[3], o[2], o[1], o[0], provider4);
+    }
+    let IpAddr::V6(v6) = ip else {
+        unreachable!("uses_ipv4_zone(V4) is always true")
+    };
+    let b = v6.octets();
+    let mut key = String::with_capacity(32);
+    for byte in b[..8].iter().rev() {
+        key.push_str(&format!("{:x}.{:x}.", byte & 0xf, byte >> 4));
+    }
+    key.pop();
+    format!("{key}.{provider6}")
+}
+
+/// The provider whose zone `query_name(ip, provider4, provider6)` actually queried; use this,
+/// not `ip.is_ipv6()`, to pick the AS-name zone for the same lookup (a NAT64 address folds to
+/// `provider4`).
+pub fn query_provider<'a>(ip: IpAddr, provider4: &'a str, provider6: &'a str) -> &'a str {
+    if uses_ipv4_zone(ip) {
+        provider4
+    } else {
+        provider6
     }
 }
 
@@ -218,6 +243,35 @@ mod tests {
         assert_eq!(
             as_name_query(&parse_txt("64500 64501 | 192.0.2.0/24"), "asn.cymru.com"),
             None
+        );
+    }
+
+    /// A NAT64 address must derive its AS-name zone from the same (v4) provider that
+    /// `query_name` used for the origin query, even when the v4 and v6 zones differ.
+    #[test]
+    fn nat64_as_name_zone_matches_the_provider_query_name_used() {
+        let v4 = "origin.v4.example.net";
+        let v6 = "origin6.v6.example.net";
+        let nat64 = ip("64:ff9b::c000:201");
+
+        assert!(uses_ipv4_zone(nat64));
+        assert_eq!(query_provider(nat64, v4, v6), v4);
+        assert_eq!(query_name(nat64, v4, v6), "1.2.0.192.origin.v4.example.net");
+
+        let info = parse_txt("64500 | 192.0.2.0/24 | US | arin | 2000-01-01");
+        assert_eq!(
+            as_name_query(&info, name_zone(query_provider(nat64, v4, v6))).as_deref(),
+            Some("AS64500.v4.example.net"),
+            "NAT64 must use the v4 zone, not v6.example.net"
+        );
+
+        // A real IPv6 address, by contrast, uses the v6 provider's zone.
+        let real_v6 = ip("2001:db8::1");
+        assert!(!uses_ipv4_zone(real_v6));
+        assert_eq!(query_provider(real_v6, v4, v6), v6);
+        assert_eq!(
+            as_name_query(&info, name_zone(query_provider(real_v6, v4, v6))).as_deref(),
+            Some("AS64500.v6.example.net")
         );
     }
 }
