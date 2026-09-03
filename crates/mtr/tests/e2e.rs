@@ -74,9 +74,13 @@ fn missing_helper_is_a_clear_fatal_error() {
     c.env_remove("MTR_OPTIONS")
         .env("MTR_PACKET", "/nonexistent/mtr-packet")
         .env("PATH", "/nonexistent");
-    let (code, _, err) = run(c.arg("-r").args(FAST));
+    let (code, out, err) = run(c.arg("-r").args(FAST));
     assert_eq!(code, Some(1));
     assert!(err.contains("mtr-packet not found"), "{err}");
+    assert!(
+        out.is_empty(),
+        "no Start: line on the failure path: {out:?}"
+    );
 }
 
 /// Real probes through the installed C helper: `MTR_E2E=1 cargo test -p mtr --test e2e -- --ignored`.

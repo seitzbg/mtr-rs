@@ -170,12 +170,12 @@ async fn run_target(opts: &Options, t: &Target, af: AddressFamily) -> Result<Tar
         (None, None) => target::find_local_address(ip, cfg.mark).map_err(Fatal::Abort)?,
     };
     let local_hostname = target::local_hostname();
-    if opts.mode == OutputMode::Report {
-        println!("{}", emit::report::start_line(&jiff::Zoned::now()));
-    }
     let mut helper = helper::spawn(ip.is_ipv6(), cfg.protocol, cfg.mark)
         .await
         .map_err(|e| Fatal::Abort(e.to_string()))?;
+    if opts.mode == OutputMode::Report {
+        println!("{}", emit::report::start_line(&jiff::Zoned::now()));
+    }
     let mut resolver = if cfg.dns || !cfg.ipinfo_fields.is_empty() {
         Some(
             Resolver::start(ResolverConfig {
