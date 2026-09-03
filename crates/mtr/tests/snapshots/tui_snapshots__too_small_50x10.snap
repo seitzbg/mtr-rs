@@ -1,0 +1,14 @@
+---
+source: crates/mtr/tests/tui_snapshots.rs
+expression: "render(&f, 50, 10)"
+---
+"                                                  "
+"                                                  "
+"                                                  "
+"                                                  "
+"                                                  "
+"  terminal too small: 60x12 minimum (now 50x10)   "
+"                                                  "
+"                                                  "
+"                                                  "
+"                                                  "
