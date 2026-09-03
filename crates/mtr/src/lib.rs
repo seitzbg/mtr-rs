@@ -4,6 +4,7 @@
 
 pub mod asn;
 pub mod cli;
+pub mod config_file;
 pub mod driver;
 pub mod emit;
 pub mod helper;
@@ -83,6 +84,18 @@ pub async fn run(argv: Vec<String>) -> i32 {
     if args.version > 0 {
         print!("{}", cli::version_text(args.version));
         return 0;
+    }
+    let cfg_path = config_file::resolve_path(args.config.as_deref());
+    // A `None` path means no `$HOME` and no absolute `$XDG_CONFIG_HOME`, i.e. there is no file to
+    // read — the same situation as a file that does not exist.
+    if let Some(p) = &cfg_path {
+        match config_file::load(p) {
+            Ok(file) => config_file::apply(&mut args, &file),
+            Err(msg) => {
+                eprintln!("mtr: config: {msg}");
+                return 1;
+            }
+        }
     }
     if let Some(file) = args.filename.take() {
         match options::hosts_from_file_option(&file, helper::sudo_guard_present()) {
@@ -214,6 +227,8 @@ async fn run_target(
                 .map_err(|e| Fatal::Abort(format!("terminal: {e}")))?;
             let tui_opts = tui::TuiOptions {
                 glyphs: tui::Glyphs::select(opts.ascii),
+                sparkline: opts.sparkline,
+                detail_pane: opts.detail_pane,
                 palette: tui::Palette::detect(opts.color).with_rtt_thresholds(opts.rtt_thresholds),
                 is_root,
                 local_hostname: &local_hostname,

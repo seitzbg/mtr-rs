@@ -10,6 +10,7 @@ use clap::{
 use mtr_core::{Config, MAX_PACKET, MIN_PACKET, fields};
 use mtr_proto::Protocol;
 
+use crate::config_file::ColorChoice;
 use crate::options::split_mtr_options;
 use crate::tui::palette::RttThresholds;
 
@@ -325,12 +326,41 @@ pub struct Args {
         value_parser = parse_rtt_thresholds
     )]
     pub rtt_thresholds: Option<RttThresholds>,
+    /// Read the configuration from PATH instead of ~/.config/mtr-rs/config.toml
+    #[arg(long = "config", value_name = "PATH")]
+    pub config: Option<String>,
+    /// Write a commented configuration file and exit
+    #[arg(long = "init-config")]
+    pub init_config: bool,
     /// Target hosts (HOSTNAME[:PORT] with -u/-T/-S)
     #[arg(value_name = "HOSTNAME")]
     pub hosts: Vec<String>,
     /// Output mode by last-flag-wins order (mtr.c:624-660); set by [`Args::parse_argv`].
     #[arg(skip)]
     pub mode: Option<OutputMode>,
+    /// The argument ids that came from `argv` — which includes the words of `$MTR_OPTIONS`, since
+    /// [`build_argv`] prepends them. Filled by [`Args::parse_argv`]; `config_file::apply` only
+    /// fills the ids that are *not* listed here.
+    #[arg(skip)]
+    pub cli_set: std::collections::BTreeSet<String>,
+    /// `display.color`; file-only, so there is no flag to parse it from.
+    #[arg(skip)]
+    pub color_choice: Option<ColorChoice>,
+    /// `display.sparkline`: the Recent column shown when the TUI starts (default on).
+    #[arg(skip = true)]
+    pub sparkline: bool,
+    /// `display.detail_pane`: the detail pane open when the TUI starts (default on).
+    #[arg(skip = true)]
+    pub detail_pane: bool,
+}
+
+/// The ids clap filled from `argv` rather than from a default.
+fn cli_set(m: &ArgMatches) -> std::collections::BTreeSet<String> {
+    m.ids()
+        .map(|id| id.as_str())
+        .filter(|id| m.value_source(id) == Some(ValueSource::CommandLine))
+        .map(str::to_string)
+        .collect()
 }
 
 /// The mode flags in `argv` order; the one that appears last wins, as each `case` in
@@ -363,6 +393,9 @@ pub struct Options {
     pub ascii: bool,
     pub color: bool,
     pub rtt_thresholds: RttThresholds,
+    /// The Recent sparkline column and the detail pane, as the TUI should start.
+    pub sparkline: bool,
+    pub detail_pane: bool,
     pub config: Config,
 }
 
@@ -372,6 +405,7 @@ impl Args {
         let matches = Args::command().try_get_matches_from(argv)?;
         let mut args = Args::from_arg_matches(&matches)?;
         args.mode = output_mode(&matches);
+        args.cli_set = cli_set(&matches);
         Ok(args)
     }
 
@@ -535,8 +569,15 @@ impl Args {
             ipinfo_provider4: self.ipinfo_provider4.clone(),
             ipinfo_provider6: self.ipinfo_provider6.clone(),
             ascii: self.ascii,
-            color: !self.no_color && std::env::var_os("NO_COLOR").is_none(),
+            // `--no-color` (or `$MTR_OPTIONS`) beats the file; `always` beats `NO_COLOR`.
+            color: match (self.no_color, self.color_choice.unwrap_or_default()) {
+                (true, _) | (false, ColorChoice::Never) => false,
+                (false, ColorChoice::Always) => true,
+                (false, ColorChoice::Auto) => std::env::var_os("NO_COLOR").is_none(),
+            },
             rtt_thresholds: self.rtt_thresholds.unwrap_or_default(),
+            sparkline: self.sparkline,
+            detail_pane: self.detail_pane,
             config,
         })
     }

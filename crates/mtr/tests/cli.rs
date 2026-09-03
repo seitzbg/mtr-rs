@@ -3,7 +3,10 @@ use std::process::{Command, Stdio};
 
 fn mtr() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_mtr"));
-    c.env_remove("MTR_OPTIONS");
+    // Point the config file at a directory that cannot exist, so these tests never pick up the
+    // developer's own ~/.config/mtr-rs/config.toml.
+    c.env_remove("MTR_OPTIONS")
+        .env("XDG_CONFIG_HOME", "/nonexistent/mtr-rs-tests");
     c
 }
 
@@ -128,4 +131,88 @@ fn last_mode_flag_wins_like_getopt() {
     let out = String::from_utf8_lossy(&o.stdout);
     assert_eq!(o.status.code(), Some(0), "{out}");
     assert!(out.starts_with("Start: "), "{out}");
+}
+
+/// A per-test config directory; `--config` points the binary straight at the file.
+fn temp_config(name: &str, text: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("mtr-rs-cli-cfg-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+    if !text.is_empty() {
+        std::fs::write(&path, text).unwrap();
+    }
+    path
+}
+
+#[test]
+fn a_malformed_config_file_is_fatal_with_its_path_and_line() {
+    let path = temp_config("malformed", "[display]\nascii = true\nnope\n");
+    let (code, _, err) = run(&["--config", path.to_str().unwrap(), "-r", "127.0.0.1"]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.starts_with(&format!("mtr: config: {}: ", path.display())),
+        "{err}"
+    );
+    assert!(err.contains("line 3"), "{err}");
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn an_invalid_config_value_reports_the_cli_validation_message() {
+    let path = temp_config("invalid", "[display]\nfields = \"LSQ\"\n");
+    let (code, _, err) = run(&["--config", path.to_str().unwrap(), "-r", "127.0.0.1"]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Unknown field identifier: Q"), "{err}");
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_missing_config_file_is_not_an_error() {
+    let path = temp_config("absent", "");
+    let (code, _, err) = run(&[
+        "--config",
+        path.to_str().unwrap(),
+        "-r",
+        "no-such-host.invalid",
+    ]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains("Failed to resolve host"), "{err}");
+    assert!(!err.contains("config:"), "{err}");
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn the_config_file_supplies_defaults_the_command_line_still_overrides() {
+    // interval 0.5 from the file trips the non-root check, proving the value was applied…
+    let path = temp_config("interval", "[probe]\ninterval = 0.5\n");
+    let (code, _, err) = run(&["--config", path.to_str().unwrap(), "-r", "127.0.0.1"]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("non-root users cannot request an interval < 1.0"),
+        "{err}"
+    );
+    // …and -i 1 on the command line replaces it, so the run gets as far as resolution
+    let (_, _, err) = run(&[
+        "--config",
+        path.to_str().unwrap(),
+        "-i",
+        "1",
+        "-r",
+        "no-such-host.invalid",
+    ]);
+    assert!(err.contains("Failed to resolve host"), "{err}");
+    // $MTR_OPTIONS beats the file for the same reason
+    let o = mtr()
+        .env("MTR_OPTIONS", "-i 1")
+        .args([
+            "--config",
+            path.to_str().unwrap(),
+            "-r",
+            "no-such-host.invalid",
+        ])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&o.stderr).contains("Failed to resolve host"));
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }

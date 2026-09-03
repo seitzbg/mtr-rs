@@ -1,0 +1,444 @@
+//! The user configuration file, `$XDG_CONFIG_HOME/mtr-rs/config.toml` (default
+//! `~/.config/mtr-rs/config.toml`). It sits between the built-in defaults and `$MTR_OPTIONS`:
+//!
+//!   built-in defaults  <  config file  <  `$MTR_OPTIONS`  <  command line
+//!
+//! `build_argv` prepends the words of `$MTR_OPTIONS` to `argv`, so clap reports both of the two
+//! upper layers as [`ValueSource::CommandLine`]; the file only fills the keys clap left at their
+//! default. This file has no counterpart in C mtr. GPL-2.0-only.
+
+use std::path::{Path, PathBuf};
+
+use serde::Deserialize;
+
+use crate::cli::Args;
+use crate::tui::palette::RttThresholds;
+
+/// `color = "auto" | "always" | "never"`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ColorChoice {
+    /// Colour unless `NO_COLOR` is set (the built-in behaviour).
+    #[default]
+    Auto,
+    /// Colour even when `NO_COLOR` is set.
+    Always,
+    /// Never colour.
+    Never,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DisplaySection {
+    pub rtt_thresholds_ms: Option<Vec<i64>>,
+    pub fields: Option<String>,
+    pub ascii: Option<bool>,
+    pub color: Option<ColorChoice>,
+    pub sparkline: Option<bool>,
+    pub detail_pane: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProbeSection {
+    pub interval: Option<f64>,
+    pub max_ttl: Option<i64>,
+    pub max_unknown: Option<i64>,
+    pub timeout: Option<i64>,
+    pub dns: Option<bool>,
+    pub asn: Option<bool>,
+}
+
+/// Every key optional, so a partial file leaves the remaining defaults alone.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileConfig {
+    #[serde(default)]
+    pub display: DisplaySection,
+    #[serde(default)]
+    pub probe: ProbeSection,
+}
+
+impl FileConfig {
+    /// The same rules the matching command line flags enforce, applied at load time so a bad file
+    /// is reported once, with its path, instead of as a confusing CLI error.
+    pub fn validate(&self) -> Result<(), String> {
+        self.rtt_thresholds()?;
+        if let Some(f) = &self.display.fields {
+            mtr_core::fields::validate_fields(f)?;
+        }
+        if let Some(i) = self.probe.interval
+            && i <= 0.0
+        {
+            return Err("wait time must be positive".to_string());
+        }
+        if let Some(t) = self.probe.timeout
+            && t < 1
+        {
+            return Err("timeout must be positive".to_string());
+        }
+        if let Some(m) = self.probe.max_ttl
+            && !(1..=255).contains(&m)
+        {
+            return Err(format!("value out of range (1 - 255): {m}"));
+        }
+        if let Some(u) = self.probe.max_unknown
+            && u < 1
+        {
+            return Err(format!("value out of range (1 - ...): {u}"));
+        }
+        Ok(())
+    }
+
+    fn rtt_thresholds(&self) -> Result<Option<RttThresholds>, String> {
+        let Some(v) = &self.display.rtt_thresholds_ms else {
+            return Ok(None);
+        };
+        if v.iter().any(|&n| n < 0) {
+            return Err("rtt thresholds must be positive".to_string());
+        }
+        let ms: Vec<u64> = v.iter().map(|&n| n as u64).collect();
+        RttThresholds::from_millis(&ms).map(Some)
+    }
+}
+
+/// `$XDG_CONFIG_HOME/mtr-rs/config.toml`, else `$HOME/.config/mtr-rs/config.toml`. `None` when
+/// neither variable is usable (an empty or relative `XDG_CONFIG_HOME` is ignored, as the spec
+/// requires).
+pub fn default_path() -> Option<PathBuf> {
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute());
+    let base = match xdg {
+        Some(p) => p,
+        None => PathBuf::from(std::env::var_os("HOME").filter(|h| !h.is_empty())?).join(".config"),
+    };
+    Some(base.join("mtr-rs").join("config.toml"))
+}
+
+/// `--config PATH` when given, otherwise [`default_path`].
+pub fn resolve_path(explicit: Option<&str>) -> Option<PathBuf> {
+    match explicit {
+        Some(p) => Some(PathBuf::from(p)),
+        None => default_path(),
+    }
+}
+
+/// An absent file is not an error and yields the all-`None` config; anything else — unreadable,
+/// malformed, or failing validation — is fatal. The returned message is already prefixed with the
+/// path, so callers print `mtr: config: {msg}`.
+pub fn load(path: &Path) -> Result<FileConfig, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(FileConfig::default()),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let cfg: FileConfig = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    cfg.validate()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(cfg)
+}
+
+/// Push the file's values into `args` for every key the command line (or `$MTR_OPTIONS`) left
+/// alone. Called between parsing and [`Args::into_options`], so the file's values then go through
+/// exactly the same validation and conversion as the flags they stand in for.
+pub fn apply(args: &mut Args, file: &FileConfig) {
+    let unset = |id: &str| !args.cli_set.contains(id);
+    if unset("rtt_thresholds")
+        && let Ok(Some(t)) = file.rtt_thresholds()
+    {
+        args.rtt_thresholds = Some(t);
+    }
+    if unset("order")
+        && let Some(f) = &file.display.fields
+    {
+        args.order = Some(f.clone());
+    }
+    if unset("ascii")
+        && let Some(a) = file.display.ascii
+    {
+        args.ascii = a;
+    }
+    if let Some(c) = file.display.color {
+        args.color_choice = Some(c);
+    }
+    if let Some(s) = file.display.sparkline {
+        args.sparkline = s;
+    }
+    if let Some(d) = file.display.detail_pane {
+        args.detail_pane = d;
+    }
+    if unset("interval")
+        && let Some(i) = file.probe.interval
+    {
+        args.interval = i;
+    }
+    if unset("max_ttl")
+        && let Some(m) = file.probe.max_ttl
+    {
+        args.max_ttl = m;
+    }
+    if unset("max_unknown")
+        && let Some(u) = file.probe.max_unknown
+    {
+        args.max_unknown = u;
+    }
+    if unset("timeout")
+        && let Some(t) = file.probe.timeout
+    {
+        args.timeout = t;
+    }
+    if unset("no_dns")
+        && let Some(d) = file.probe.dns
+    {
+        args.no_dns = !d;
+    }
+    if unset("aslookup")
+        && let Some(z) = file.probe.asn
+    {
+        args.aslookup = z;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::cli::{Options, build_argv};
+
+    /// A `config.toml` in a private temp directory, removed again when `f` returns.
+    fn with_file<R>(text: &str, f: impl FnOnce(&Path) -> R) -> R {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "mtr-rs-cfg-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, text).unwrap();
+        let r = f(&path);
+        std::fs::remove_dir_all(&dir).unwrap();
+        r
+    }
+
+    fn parse(text: &str) -> Result<FileConfig, String> {
+        with_file(text, |path| {
+            load(path).map_err(|e| e.replace(&format!("{}: ", path.display()), ""))
+        })
+    }
+
+    /// The whole chain: file → `$MTR_OPTIONS` → command line → [`Options`].
+    fn opts(text: &str, env: Option<&str>, args: &[&str]) -> Options {
+        with_file(text, |path| {
+            let argv = build_argv(env, args.iter().map(|s| s.to_string())).unwrap();
+            let mut a = Args::parse_argv(argv).unwrap();
+            apply(&mut a, &load(path).unwrap());
+            a.into_options(true).unwrap()
+        })
+    }
+
+    #[test]
+    fn the_command_line_beats_mtr_options_beats_the_file() {
+        let file = "[probe]\ninterval = 2.0\n";
+        assert_eq!(opts("", None, &["h"]).config.interval, 1.0);
+        assert_eq!(opts(file, None, &["h"]).config.interval, 2.0);
+        assert_eq!(opts(file, Some("-i 3"), &["h"]).config.interval, 3.0);
+        assert_eq!(
+            opts(file, Some("-i 3"), &["-i", "4", "h"]).config.interval,
+            4.0
+        );
+        assert_eq!(opts(file, None, &["-i", "4", "h"]).config.interval, 4.0);
+    }
+
+    #[test]
+    fn every_key_reaches_options() {
+        let o = opts(
+            r#"
+[display]
+rtt_thresholds_ms = [5, 10, 20, 40]
+fields = "LSNB"
+ascii = true
+color = "never"
+sparkline = false
+detail_pane = false
+[probe]
+interval = 2.5
+max_ttl = 20
+max_unknown = 3
+timeout = 7
+dns = false
+asn = true
+"#,
+            None,
+            &["h"],
+        );
+        assert_eq!(o.rtt_thresholds.to_millis(), [5, 10, 20, 40]);
+        assert_eq!(o.config.fields, "LSNB");
+        assert!(o.ascii && !o.color && !o.sparkline && !o.detail_pane);
+        assert_eq!(o.config.interval, 2.5);
+        assert_eq!(o.config.max_ttl, 20);
+        assert_eq!(o.config.max_unknown, 3);
+        assert_eq!(o.config.probe_timeout, std::time::Duration::from_secs(7));
+        assert!(!o.config.dns);
+        assert_eq!(o.config.ipinfo_fields, vec![0]);
+    }
+
+    #[test]
+    fn defaults_survive_an_empty_file_and_the_cli_overrides_each_key() {
+        let o = opts("", None, &["h"]);
+        assert_eq!(o.rtt_thresholds, RttThresholds::default());
+        assert_eq!(o.config.fields, "LS NABWV");
+        assert!(!o.ascii && o.sparkline && o.detail_pane);
+        assert!(o.config.dns && o.config.ipinfo_fields.is_empty());
+        assert_eq!((o.config.max_ttl, o.config.max_unknown), (30, 12));
+
+        let file = "[display]\nascii = true\nfields = \"LSNB\"\nrtt_thresholds_ms = [5, 10, 20, 40]\n\
+                    [probe]\ndns = false\nasn = true\nmax_ttl = 20\nmax_unknown = 3\ntimeout = 7\n";
+        let o = opts(
+            file,
+            None,
+            &[
+                "-o",
+                "LSNA",
+                "-n",
+                "-m",
+                "9",
+                "-U",
+                "4",
+                "-Z",
+                "2",
+                "--rtt-thresholds",
+                "1,2,3,4",
+                "h",
+            ],
+        );
+        assert_eq!(o.config.fields, "LSNA");
+        assert_eq!(o.rtt_thresholds.to_millis(), [1, 2, 3, 4]);
+        assert_eq!((o.config.max_ttl, o.config.max_unknown), (9, 4));
+        assert_eq!(o.config.probe_timeout, std::time::Duration::from_secs(2));
+        assert!(!o.config.dns);
+        // `--ascii` is a flag: the file can turn it on, the CLI can only add to that
+        assert!(opts(file, None, &["h"]).ascii);
+        assert!(opts("[display]\nascii = false\n", None, &["--ascii", "h"]).ascii);
+        // `dns = true` in the file loses to `-n`
+        assert!(!opts("[probe]\ndns = true\n", None, &["-n", "h"]).config.dns);
+        assert!(!opts("[probe]\ndns = false\n", None, &["h"]).config.dns);
+    }
+
+    #[test]
+    fn color_choice_maps_to_the_colour_flag() {
+        // `never` is the file saying `--no-color`; `--no-color` on the command line still wins
+        assert!(!opts("[display]\ncolor = \"never\"\n", None, &["h"]).color);
+        assert!(
+            !opts(
+                "[display]\ncolor = \"always\"\n",
+                None,
+                &["--no-color", "h"]
+            )
+            .color
+        );
+        assert!(opts("[display]\ncolor = \"always\"\n", None, &["h"]).color);
+    }
+
+    #[test]
+    fn a_full_file_parses_every_key() {
+        let cfg = parse(
+            r#"
+[display]
+rtt_thresholds_ms = [5, 10, 20, 40]
+fields = "LSNB"
+ascii = true
+color = "never"
+sparkline = false
+detail_pane = false
+[probe]
+interval = 2.5
+max_ttl = 20
+max_unknown = 3
+timeout = 7
+dns = false
+asn = true
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.display.rtt_thresholds_ms, Some(vec![5, 10, 20, 40]));
+        assert_eq!(cfg.display.fields.as_deref(), Some("LSNB"));
+        assert_eq!(cfg.display.ascii, Some(true));
+        assert_eq!(cfg.display.color, Some(ColorChoice::Never));
+        assert_eq!(cfg.display.sparkline, Some(false));
+        assert_eq!(cfg.display.detail_pane, Some(false));
+        assert_eq!(cfg.probe.interval, Some(2.5));
+        assert_eq!(cfg.probe.max_ttl, Some(20));
+        assert_eq!(cfg.probe.max_unknown, Some(3));
+        assert_eq!(cfg.probe.timeout, Some(7));
+        assert_eq!(cfg.probe.dns, Some(false));
+        assert_eq!(cfg.probe.asn, Some(true));
+    }
+
+    #[test]
+    fn a_partial_file_leaves_the_other_keys_unset() {
+        let cfg = parse("[probe]\ninterval = 2.0\n").unwrap();
+        assert_eq!(cfg.probe.interval, Some(2.0));
+        assert_eq!(cfg.probe.max_ttl, None);
+        assert_eq!(cfg.display, DisplaySection::default());
+        assert_eq!(parse("").unwrap(), FileConfig::default());
+    }
+
+    #[test]
+    fn a_missing_file_is_not_an_error() {
+        assert_eq!(
+            load(Path::new("/nonexistent/mtr-rs/config.toml")).unwrap(),
+            FileConfig::default()
+        );
+    }
+
+    #[test]
+    fn malformed_and_invalid_files_are_errors() {
+        assert!(parse("[display\nascii = true\n").unwrap_err().contains('['));
+        assert_eq!(
+            parse("[display]\nfields = \"LSQ\"\n").unwrap_err(),
+            "Unknown field identifier: Q"
+        );
+        assert_eq!(
+            parse("[display]\nrtt_thresholds_ms = [1, 2, 3]\n").unwrap_err(),
+            "rtt thresholds need exactly 4 values, got 3"
+        );
+        assert_eq!(
+            parse("[display]\nrtt_thresholds_ms = [40, 30, 20, 10]\n").unwrap_err(),
+            "rtt thresholds must be ascending: 30 is not greater than 40"
+        );
+        assert_eq!(
+            parse("[probe]\ninterval = 0.0\n").unwrap_err(),
+            "wait time must be positive"
+        );
+        assert_eq!(
+            parse("[probe]\ntimeout = 0\n").unwrap_err(),
+            "timeout must be positive"
+        );
+        assert_eq!(
+            parse("[probe]\nmax_ttl = 0\n").unwrap_err(),
+            "value out of range (1 - 255): 0"
+        );
+        assert!(
+            parse("[probe]\nnope = 1\n")
+                .unwrap_err()
+                .contains("unknown field")
+        );
+        assert!(
+            parse("[display]\ncolor = \"pink\"\n")
+                .unwrap_err()
+                .contains("unknown variant")
+        );
+    }
+
+    #[test]
+    fn default_path_ends_in_the_xdg_location() {
+        // `default_path` reads the process environment, so only assert on its shape here; the
+        // end-to-end path behaviour is covered by the `--init-config` process test.
+        let p = default_path();
+        assert!(p.is_none_or(|p| p.ends_with("mtr-rs/config.toml")));
+    }
+}
