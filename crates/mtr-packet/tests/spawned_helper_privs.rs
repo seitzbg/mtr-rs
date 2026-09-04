@@ -8,7 +8,12 @@
 //! thing. GPL-2.0-only.
 
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Every wait in this test is bounded by this: a hung helper must fail the test, not hang
+/// `cargo test --workspace` with no diagnostic.
+const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The helper to exercise: the binary this test was built against, or the operator's setcap'd
 /// copy named by `MTR_PACKET_UNDER_TEST`.
@@ -17,7 +22,22 @@ fn helper_path() -> String {
         .unwrap_or_else(|_| env!("CARGO_BIN_EXE_mtr-packet").to_string())
 }
 
-/// The `Cap*` lines of `/proc/<pid>/status`, as `(name, hex value)`.
+/// Owns the child for the whole test. `std::process::Child::drop` does *not* kill, so without
+/// this a panicking assertion would leave a helper running; `Drop` here kills and reaps it.
+struct Reaper(Child);
+
+impl Drop for Reaper {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// The `Cap*` lines of `/proc/<pid>/status`. That file is one `Name:\tvalue` pair per line
+/// (tab-separated; `fs/proc/array.c`), and the capability sets appear as `CapInh:`, `CapPrm:`,
+/// `CapEff:`, `CapBnd:` and `CapAmb:`, each a 16-digit hex mask. `status` stays world-readable
+/// for a process that gained file capabilities (only `maps`/`mem`-style entries are gated on
+/// ptrace access), so this also works against a setcap'd copy.
 fn capabilities_of(pid: u32) -> Vec<(String, String)> {
     let status = std::fs::read_to_string(format!("/proc/{pid}/status"))
         .unwrap_or_else(|e| panic!("reading /proc/{pid}/status: {e}"));
@@ -39,32 +59,59 @@ fn the_running_helper_holds_no_capabilities() {
         .unwrap_or_else(|e| panic!("spawning {path}: {e}"));
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut reaper = Reaper(child);
+    let pid = reaper.0.id();
 
     // Synchronisation point: the helper only reaches its command loop after `drop_all()`, so
     // reading this reply removes every timing assumption from the capability check below.
+    // The read runs on its own thread and the test waits on a channel, so the timeout holds
+    // even for a stuck helper that handed its stdout to a grandchild — that pipe stays open
+    // past `kill()`, and a plain `read_line` here would block forever.
     stdin
         .write_all(b"1 check-support feature version\n")
         .unwrap();
     stdin.flush().unwrap();
-    let mut line = String::new();
-    stdout.read_line(&mut line).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = tx.send(stdout.read_line(&mut line).map(|_| line));
+    });
+    let line = match rx.recv_timeout(TIMEOUT) {
+        Ok(Ok(line)) => line,
+        Ok(Err(e)) => panic!("reading from {path}: {e}"),
+        // `reaper` kills the child as this panic unwinds.
+        Err(_) => panic!("{path} produced no reply within {TIMEOUT:?}"),
+    };
     assert!(
         line.starts_with("1 feature-support support "),
-        "unexpected reply {line:?}"
+        "unexpected reply {line:?} from {path}"
     );
 
     // The child is now blocked on stdin, which we still hold open.
-    let caps = capabilities_of(child.id());
+    let caps = capabilities_of(pid);
     for want in ["CapEff", "CapPrm", "CapInh"] {
         let (_, value) = caps
             .iter()
             .find(|(k, _)| k == want)
-            .unwrap_or_else(|| panic!("no {want} in /proc/{}/status: {caps:?}", child.id()));
+            .unwrap_or_else(|| panic!("no {want} in /proc/{pid}/status: {caps:?}"));
         assert_eq!(value, "0000000000000000", "{want} of {path} is not empty");
     }
 
-    // Closing stdin ends the loop (lib.rs `serve`), as EOF does in packet.c:131-167.
+    // Closing stdin ends the loop (lib.rs `serve`), as EOF does in packet.c:131-167. Poll for
+    // the exit rather than blocking in `wait()`, so a helper that ignores EOF fails here too.
     drop(stdin);
-    let status = child.wait().unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    let status = loop {
+        match reaper.0.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {}
+            Err(e) => panic!("waiting for {path}: {e}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{path} did not exit within {TIMEOUT:?} of stdin closing"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
     assert!(status.success(), "{path} exited with {status}");
 }
