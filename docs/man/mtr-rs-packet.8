@@ -9,17 +9,15 @@ mtr-rs-packet \- send network probes for mtr-rs and report the replies
 .B mtr-rs-packet
 is the privileged half of
 .BR mtr-rs (8).
-It is started by the unprivileged client, reads one command per line on
-standard input and writes one reply per line on standard output. It opens
-its raw sockets first, drops every privilege (setgid, setuid, and all
-capability sets bar a granted
-.BR CAP_NET_ADMIN ,
-see
-.BR PRIVILEGES ),
-and only then starts serving. It exits when standard input
-is closed and no probe is outstanding.
+The unprivileged client starts it, writes one command per line on its
+standard input and reads one reply per line from its standard output.
+It opens its raw sockets first, then drops setgid, setuid and every
+capability except a granted CAP_NET_ADMIN (see
+.BR PRIVILEGES )
+before serving the first command. It exits when standard input is closed
+and no probe is outstanding.
 .PP
-The line protocol is that of mtr 0.96: a request is
+The line protocol is that of mtr 0.96. A request is
 .IR "token command [key value]..." ,
 where
 .I token
@@ -38,11 +36,12 @@ and optionally
 .BR "protocol icmp|udp|tcp|sctp" ", " "port N" ", " "local-port N" ", "
 .BR "local-ip ADDR" ", " "local-device NAME" ", " "ttl N" ", " "size N" ", "
 .BR "bit-pattern N" ", " "tos N" ", " "timeout SECONDS" ", " "mark N" ).
+.PP
 Probe replies are
 .BR reply ", " ttl-expired " or " no-route-host ,
 each followed by
-.BR "ip-4|ip-6 ADDR round-trip-time MICROSECONDS"
-and, when the router attached RFC 4950 MPLS objects,
+.BR "ip-4|ip-6 ADDR round-trip-time MICROSECONDS" .
+A router that attached RFC 4950 MPLS objects adds
 .BR "mpls label,tc,s,ttl[,...]" .
 A probe that gets no answer within its timeout yields
 .BR no-reply .
@@ -57,54 +56,58 @@ and an overlong one
 .BR "0 command-buffer-overflow" .
 .SH PRIVILEGES
 Raw sockets need
-.B CAP_NET_RAW
-(install with
-.BR "setcap cap_net_raw+ep /usr/bin/mtr-rs-packet" ).
-Without it
+.BR CAP_NET_RAW :
+.PP
+.RS
+.B setcap cap_net_raw+ep /usr/bin/mtr-rs-packet
+.RE
+.PP
+Without it,
 .B mtr-rs-packet
 falls back to unprivileged ICMP and UDP datagram sockets with
-.BR IP_RECVERR ;
-echo replies and time-exceeded errors are still reported, but MPLS labels
-are not available on that path and TCP/SCTP probes cannot see intermediate
+.BR IP_RECVERR .
+Echo replies and time-exceeded errors are still reported. MPLS labels are
+not available on that path, and TCP and SCTP probes cannot see intermediate
 hops.
 .PP
-The privilege drop keeps
-.BR CAP_NET_ADMIN ,
-and only that, when it was actually granted, because
 .B SO_MARK
-is set per probe after the drop:
+is set per probe, after the privilege drop, so the drop keeps
+.B CAP_NET_ADMIN
+when the process was granted it. Nothing else survives.
 .BR mtr-rs (8)'s
 .B \-M
 .RB ( \-\-mark )
 therefore needs
 .B cap_net_admin
 on
-.B mtr-rs-packet
+.BR mtr-rs-packet ,
 and root (or
 .BR cap_net_admin )
-for the client's own route lookup. Grant both with
-.BR "setcap cap_net_raw,cap_net_admin+ep /usr/bin/mtr-rs-packet" .
+for the client's own route lookup. Grant both capabilities with:
+.PP
+.RS
+.B setcap cap_net_raw,cap_net_admin+ep /usr/bin/mtr-rs-packet
+.RE
+.PP
 .B "check\-support feature mark"
 answers
 .B ok
 only when the capability is really held.
 .PP
 .B CAP_NET_ADMIN
-is one of the broadest Linux capabilities \(em interface and routing
-configuration, netfilter, promiscuous mode, netlink administration \(em so it
-grants far more than
-.BR SO_MARK ,
-and because the drop happens before the first command is read, a helper that
-started with it keeps it for the whole run, on every run and not only when
+is one of the broadest Linux capabilities: interface and routing
+configuration, netfilter, promiscuous mode, netlink administration. The drop
+runs before the first command is read, so a helper that started with the
+capability keeps it for the whole run, on every run and not only when
 .B \-M
-is used; the same holds under
+is used. The same holds under
 .BR "sudo mtr-rs" .
 Grant it only if you use
 .BR \-M .
 .SH FILES
 .TP
 .I /etc/mtr.is.run.under.sudo
-When present, the
+When this file is present, the
 .BR mtr-rs (8)
 client ignores
 .B $MTR_PACKET
@@ -112,14 +115,14 @@ and
 .BR $MTR_RS_LOG ,
 refuses
 .BR \-F ", " \-\-config " and " \-\-init-config ,
-and does not read the default user configuration file.  These are the
-environment- or argument-controlled paths that the client can otherwise
-execute, read, or create.  The marker therefore prevents a sudoers rule permitting
+and does not read the default user configuration file.  Those are the
+environment- and argument-controlled paths that the client would otherwise
+execute, read or create.  The marker keeps a sudoers rule for
 .B mtr-rs
-from being used for arbitrary path access; it does not drop the client's root
-privileges or restrict which network targets and probe options the caller may
-select.  The sudo policy should still sanitise the environment and grant only
-the intended command line.
+from granting arbitrary path access.  It does not drop the client's root
+privileges, and it does not restrict the network targets or probe options the
+caller may select.  The sudo policy should still sanitise the environment and
+grant only the intended command line.
 .SH SEE ALSO
 .BR mtr-rs (8)
 .SH AUTHORS
