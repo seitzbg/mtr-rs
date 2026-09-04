@@ -51,7 +51,10 @@ Without `cap_net_raw` (and without root) the raw sockets fail to open and the he
 unprivileged `SOCK_DGRAM` ICMP/UDP sockets with `IP_RECVERR`/`IPV6_RECVERR`, reading ICMP errors off
 the socket error queue. That path needs the kernel's ping sockets to be open to your group
 (`/proc/sys/net/ipv4/ping_group_range`); it answers ICMP and UDP probes, and `check-support` reports
-what actually opened. TCP and SCTP probes never need privilege.
+what actually opened. TCP and SCTP probes reach their destination without privilege — the
+`connect()` they are built on needs none — but the `ttl-expired` answer from an *intermediate* hop
+arrives as an ICMP time-exceeded message, which only the raw ICMP receive socket can read. So
+unprivileged TCP/SCTP probes see the final hop's `reply` (or `no-reply`), not the path.
 
 ### Compat suites
 
@@ -73,14 +76,20 @@ baseline. `param.py` and `probe.py` need capabilities:
     sudo setcap cap_net_raw+ep "$MTR_C_REPO"/test/mtr-packet-listen   # built on demand by run.sh
 
 `param.py` skips itself with a message when the listener lacks `cap_net_raw`. Its four tests are on
-the known-divergence list: upstream's `test/packet_listen.c` still hard-codes `SEQUENCE_NUM 33000`,
-but mtr commit e95eaf4 moved `MIN_PORT` to 33434 in `packet/probe_unix.h`, so a 0.96-conformant
-helper (ours, and the C helper at 7b01773) makes the listener time out. To verify `param.py`
-positively, rebuild the listener for the real first sequence — the wrapper patches a scratch copy of
-the source under `target/compat/` rather than touching the C repo:
+the known-divergence list *while the listener is the stock one*: upstream's `test/packet_listen.c`
+still hard-codes `SEQUENCE_NUM 33000`, but mtr commit e95eaf4 moved `MIN_PORT` to 33434 in
+`packet/probe_unix.h`, so a 0.96-conformant helper (ours, and the C helper at 7b01773) makes the
+listener time out. To verify `param.py` positively, rebuild the listener for the real first
+sequence — the wrapper patches a scratch copy of the source under `target/compat/` rather than
+touching the C repo:
 
-    tests/compat/run.sh --listen-seq 33434 param -v      # or MTR_LISTEN_SEQUENCE=33434
+    tests/compat/run.sh --listen-seq 33434 param -v
     sudo setcap cap_net_raw+ep "$MTR_C_REPO"/test/mtr-packet-listen   # the rebuild drops the cap
+
+Once the listener matches `MIN_PORT`, those four ids come **off** the known-divergence list and
+gate again, so a real size/TOS/bit-pattern regression fails `--compare`. `--listen-seq` is what
+rebuilds; `MTR_LISTEN_SEQUENCE=33434` on its own only declares which sequence an already-built,
+already-`setcap`'d listener was compiled for (that is what CI does, so it does not strip the cap).
 
 In `cargo test` only
 `cmdparse.py TestCommandParse` runs (it needs no privileges); `param.py` and `probe.py` are behind
