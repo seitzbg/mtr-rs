@@ -186,6 +186,9 @@ In `cargo test` only
     cargo xtask dist                                 # both, plus a release build, laid out as
                                                      # target/dist/mtr-rs-<version>-<arch>/{bin,man,completions}
 
+User-visible changes go in `CHANGELOG.md` (Keep a Changelog format) in the same commit; planned
+work lives in `ROADMAP.md`.
+
 ### Releasing
 
 1. Bump `version` under `[workspace.package]` in the root `Cargo.toml`, run `cargo check --workspace`

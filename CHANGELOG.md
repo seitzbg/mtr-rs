@@ -1,0 +1,34 @@
+# Changelog
+
+All notable changes to mtr-rs are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
+[Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+### Added
+### Changed
+### Fixed
+### Security
+
+## [0.1.0] - Unreleased
+
+First release of the Rust port of mtr 0.96 (upstream commit 7b01773).
+
+### Added
+- `mtr` client: interactive ratatui TUI (default), classic `-r` report, `-w` wide report, `-j` JSON
+  and `-C` CSV modes with the same output as the C client; `--report-on-exit`; AS-number and
+  AS-name lookup; absolute RTT colour thresholds (`--rtt-thresholds`, default 30/100/200/500 ms);
+  `--ascii`, `--color auto|always|never`, `NO_COLOR`.
+- Config file `~/.config/mtr-rs/config.toml` (`--init-config`, `--config PATH`); precedence
+  defaults < file < `MTR_OPTIONS` < command line.
+- `mtr-packet` helper in Rust, wire-compatible with the C helper of mtr 0.96: ICMP/UDP/TCP/SCTP
+  probes over IPv4/IPv6, MPLS extension decoding (RFC 4884/4950), full privilege drop after the
+  sockets are open, unprivileged `SOCK_DGRAM` + `IP_RECVERR` fallback on Linux.
+- Packaging: `cargo xtask man|completions|dist`, `scripts/install.sh`, Debian package `mtr-rs`,
+  release workflow producing x86_64 and aarch64 tarballs and `.deb`s on `v*` tags.
+- Fuzz targets for the line protocol (`crates/mtr-proto/fuzz`) and the ICMP/MPLS parsers
+  (`crates/mtr-packet/fuzz`), run nightly.
+
+[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/seitzbg/mtr-rs/releases/tag/v0.1.0
