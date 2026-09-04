@@ -79,10 +79,11 @@ elsewhere). Write a fully commented starter file with
 
     mtr-rs --init-config   # creates the file, prints its path, never overwrites one
 
-`mtr-rs --init-config [options]` writes the options in effect — the built-in defaults, your
-existing file, `$MTR_OPTIONS` and the command line — so `mtr-rs --init-config -i 2 -z` saves a
+`mtr-rs --init-config [options]` writes the options in effect — the built-in defaults, plus
+whatever `$MTR_OPTIONS` and the command line change — so `mtr-rs --init-config -i 2 -z` saves a
 tuned setup. Keys still at their default stay commented out; the ones you changed are written
-uncommented.
+uncommented. It reads no configuration file of its own (the file it would read is the one it
+refuses to overwrite).
 
 The file only supplies defaults. Precedence, lowest to highest:
 

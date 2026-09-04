@@ -4,8 +4,8 @@
 # Precedence, lowest to highest:
 #   built-in defaults  <  this file  <  $MTR_OPTIONS  <  the command line
 #
-# Every key is optional and is shown below commented out, with its built-in default.
-# Uncomment a key to change it.
+# Every key is optional. A key still at its built-in default is shown commented out, with that
+# default; a key you changed on the --init-config command line is written uncommented.
 
 [display]
 # The four upper bounds of the RTT colour ramp, in milliseconds: below the first is green, then

@@ -23,8 +23,8 @@ const HEADER: &str = r##"# mtr-rs configuration file — ~/.config/mtr-rs/config
 # Precedence, lowest to highest:
 #   built-in defaults  <  this file  <  $MTR_OPTIONS  <  the command line
 #
-# Every key is optional and is shown below commented out, with its built-in default.
-# Uncomment a key to change it.
+# Every key is optional. A key still at its built-in default is shown commented out, with that
+# default; a key you changed on the --init-config command line is written uncommented.
 
 [display]
 "##;
@@ -214,6 +214,9 @@ fn toml_message(text: &str, e: &toml::de::Error) -> String {
     format!("{} at line {line} column {column}", e.message())
 }
 
+/// The built-in `-o` field spec, i.e. the one `Args::into_options` falls back to.
+const DEFAULT_FIELDS: &str = "LS NABWV";
+
 /// The values `--init-config` writes: one field per configuration key, holding the value that is
 /// actually in effect — the built-in default, or whatever the existing file, `$MTR_OPTIONS` or
 /// the command line put in its place.
@@ -240,7 +243,7 @@ impl Default for EffectiveConfig {
     fn default() -> Self {
         Self {
             rtt_thresholds: RttThresholds::default(),
-            fields: "LS NABWV".to_string(),
+            fields: DEFAULT_FIELDS.to_string(),
             ascii: false,
             color: ColorChoice::Auto,
             sparkline: true,
@@ -257,11 +260,22 @@ impl Default for EffectiveConfig {
 }
 
 impl EffectiveConfig {
-    /// The rendered file has to load again, so run it through the same checks [`load`] applies —
-    /// `-o LSQ` or `-i nan` are only rejected by [`Args::into_options`], which `--init-config`
-    /// never reaches.
-    fn validate(&self) -> Result<(), String> {
-        FileConfig::from(self).validate().map(|_| ())
+    /// The rendered file has to load *and* run again, so apply both the checks [`load`] applies
+    /// and the one [`Args::into_options`] adds on top — `-o LSQ`, `-i nan` and, for a non-root
+    /// caller, `-i 0.5` are all rejected there, and `--init-config` never reaches it. Without
+    /// this, `--init-config -i 0.5` as a normal user would write a file that fails every later
+    /// run, and `--init-config` refuses to overwrite the file it just created.
+    ///
+    /// The message names the options, not the file: nothing has been written when it fires.
+    fn validate(&self, is_root: bool) -> Result<(), String> {
+        let fail = |e: String| Err(format!("cannot save these options: {e}"));
+        if let Err(e) = FileConfig::from(self).validate() {
+            return fail(e);
+        }
+        if !is_root && self.interval < 1.0 {
+            return fail("non-root users cannot request an interval < 1.0 seconds".to_string());
+        }
+        Ok(())
     }
 }
 
@@ -305,7 +319,7 @@ pub fn effective_from_args(args: &Args) -> EffectiveConfig {
         fields: args
             .order
             .clone()
-            .unwrap_or_else(|| EffectiveConfig::default().fields),
+            .unwrap_or_else(|| DEFAULT_FIELDS.to_string()),
         ascii: args.ascii,
         color: match (args.color, args.no_color) {
             (Some(c), _) => c,
@@ -474,8 +488,8 @@ pub fn init_config_target(explicit: Option<&str>, guard_present: bool) -> Result
 /// `--init-config`: create the parent directories and write [`render`]'s output, refusing to
 /// touch an existing file. The message is path-prefixed like [`load`]'s, except for the
 /// validation error, which is about the options and not about the file.
-pub fn init(path: &Path, cfg: &EffectiveConfig) -> Result<(), String> {
-    cfg.validate()?;
+pub fn init(path: &Path, cfg: &EffectiveConfig, is_root: bool) -> Result<(), String> {
+    cfg.validate(is_root)?;
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
@@ -1000,9 +1014,20 @@ asn = true
             ..EffectiveConfig::default()
         };
         assert_eq!(
-            init(Path::new("/nonexistent/x.toml"), &cfg).unwrap_err(),
-            "Unknown field identifier: Q"
+            init(Path::new("/nonexistent/x.toml"), &cfg, true).unwrap_err(),
+            "cannot save these options: Unknown field identifier: Q"
         );
+        // the non-root rule of `into_options` applies too, so `--init-config -i 0.5` cannot
+        // leave a normal user with a file that fails every later run
+        let slow = EffectiveConfig {
+            interval: 0.5,
+            ..EffectiveConfig::default()
+        };
+        assert_eq!(
+            init(Path::new("/nonexistent/x.toml"), &slow, false).unwrap_err(),
+            "cannot save these options: non-root users cannot request an interval < 1.0 seconds"
+        );
+        assert!(slow.validate(true).is_ok());
     }
 
     #[test]
@@ -1010,13 +1035,13 @@ asn = true
         let dir = std::env::temp_dir().join(format!("mtr-rs-init-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("nested").join("config.toml");
-        init(&path, &EffectiveConfig::default()).unwrap();
+        init(&path, &EffectiveConfig::default(), false).unwrap();
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             render(&EffectiveConfig::default())
         );
         assert_eq!(
-            init(&path, &EffectiveConfig::default()).unwrap_err(),
+            init(&path, &EffectiveConfig::default(), false).unwrap_err(),
             format!("{}: file exists, refusing to overwrite it", path.display())
         );
         // the round trip: what init wrote loads cleanly

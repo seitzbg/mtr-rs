@@ -85,7 +85,7 @@ enum TargetOutcome {
 }
 
 /// A target and the address it resolved to, so the address is looked up exactly once per run.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct ResolvedTarget<'a> {
     target: &'a Target,
     ip: std::net::IpAddr,
@@ -165,20 +165,31 @@ pub async fn run(argv: Vec<String>) -> i32 {
     }
     let sudo_guard = helper::sudo_guard_present();
     init_logging(sudo_guard);
-    // Resolved before anything is read, so the sudo guard refuses `--init-config` with its own
-    // message rather than through the `--config` check below; the file itself is written after
-    // the merge, since what it saves is the options in effect.
-    let init_target = if args.init_config {
-        match config_file::init_config_target(args.config.as_deref(), sudo_guard) {
-            Ok(p) => Some(p),
+    let is_root = nix::unistd::Uid::current().is_root();
+    // `--init-config` saves the options in effect: the built-in defaults, `$MTR_OPTIONS` and the
+    // command line, which clap has already merged into `args`. It deliberately reads no
+    // configuration file — the file it would read is the one it then refuses to overwrite, so
+    // that layer could never contribute a value. Handled before anything is read so the sudo
+    // guard refuses it with its own message rather than through the `--config` check below.
+    if args.init_config {
+        let p = match config_file::init_config_target(args.config.as_deref(), sudo_guard) {
+            Ok(p) => p,
             Err(msg) => {
                 err(format_args!("config: {msg}"));
                 return 1;
             }
-        }
-    } else {
-        None
-    };
+        };
+        return match config_file::init(&p, &config_file::effective_from_args(&args), is_root) {
+            Ok(()) => {
+                println!("{}", p.display());
+                0
+            }
+            Err(msg) => {
+                err(format_args!("config: {msg}"));
+                1
+            }
+        };
+    }
     let cfg_path = match config_file::config_source(args.config.as_deref(), sudo_guard) {
         Ok(p) => p,
         Err(msg) => {
@@ -209,22 +220,6 @@ pub async fn run(argv: Vec<String>) -> i32 {
             }
         }
     }
-    // After the config file, `$MTR_OPTIONS` and the command line have all been merged into
-    // `args`: `--init-config` writes the options in effect, not only the built-in defaults.
-    if let Some(p) = init_target {
-        return match config_file::init(&p, &config_file::effective_from_args(&args)) {
-            Ok(()) => {
-                println!("{}", p.display());
-                0
-            }
-            Err(msg) => {
-                err(format_args!("config: {msg}"));
-                1
-            }
-        };
-    }
-
-    let is_root = nix::unistd::Uid::current().is_root();
     let opts = match args.into_options(is_root) {
         Ok(o) => o,
         Err(msg) => {
@@ -243,13 +238,23 @@ pub async fn run(argv: Vec<String>) -> i32 {
 
     let mut exit_val = 0;
     let mut json_docs: Vec<String> = Vec::new();
-    for (i, t) in targets_to_run(opts.mode, &opts.targets).iter().enumerate() {
-        // With a preflight the address is already known (and `i` indexes the same slice, since
-        // the preflight only runs in the report modes, where every target runs); without one it
-        // is looked up here, in the position `run_target` used to resolve from, so a failure is
-        // still per-target rather than fatal to the whole run.
-        let resolved = match &preflight {
-            Some(rs) => Ok(rs[i].clone()),
+    let run_list = targets_to_run(opts.mode, &opts.targets);
+    // The preflight covers every target, and it only runs in the report modes, where `run_list`
+    // is the whole slice — so pairing the two by position is exactly right. `zip` states that
+    // instead of asserting it: a shorter list would silently run fewer targets, which the
+    // `debug_assert` catches in the tests.
+    debug_assert!(
+        preflight
+            .as_ref()
+            .is_none_or(|rs| rs.len() == run_list.len())
+    );
+    let mut preflight = preflight.unwrap_or_default().into_iter();
+    for t in run_list {
+        // With a preflight the address is already known; without one it is looked up here, in
+        // the position `run_target` used to resolve from, so a failure is still per-target
+        // rather than fatal to the whole run.
+        let resolved = match preflight.next() {
+            Some(rt) => Ok(rt),
             None => target::resolve_target(&t.name, af)
                 .await
                 .map(|ip| ResolvedTarget { target: t, ip }),
