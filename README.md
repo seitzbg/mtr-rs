@@ -136,6 +136,11 @@ really changed, and only then the effective, permitted and inheritable capabilit
 (the order of `drop_elevated_permissions()` in the C `packet/packet.c`). From that point it is an
 ordinary unprivileged process serving requests on the sockets it already holds.
 
+Without that capability the helper falls back to unprivileged ICMP DGRAM sockets, which the kernel
+only hands to gids inside `net.ipv4.ping_group_range` — so the other fix, when `setcap` is not an
+option, is `sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"`; the client names both whenever
+the helper cannot open its sockets.
+
 The one exception is `CAP_NET_ADMIN`, which the drop keeps — and keeps *only* when the process held it
 going in, in the effective and permitted sets, never in the inheritable one — because `SO_MARK` is set
 per probe, after the drop. That covers a helper given the capability with `setcap` and a helper run as

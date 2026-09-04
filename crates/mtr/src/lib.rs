@@ -276,12 +276,10 @@ pub async fn run(argv: Vec<String>) -> i32 {
             // difference — nothing partial has been printed and the exit status is still 1.
             Err(msg) => {
                 err(&msg);
-                if msg == helper::fatal_message(&mtr_proto::ResponseKind::PermissionDenied).unwrap()
-                {
-                    err(format_args!(
-                        "hint: sudo setcap cap_net_raw+ep \"$(command -v {})\"",
-                        helper::HELPER
-                    ));
+                if let Some(hint) = helper::privilege_hint(&msg) {
+                    for line in hint.lines() {
+                        err(line);
+                    }
                 }
                 if target_failure_is_fatal(opts.mode) {
                     return 1;

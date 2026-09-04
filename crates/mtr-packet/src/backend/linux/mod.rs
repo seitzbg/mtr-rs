@@ -55,7 +55,8 @@ impl LinuxBackend {
             let e4 = v4.err().map(|e| e.to_string()).unwrap_or_default();
             let e6 = v6.err().map(|e| e.to_string()).unwrap_or_default();
             return Err(Fatal::Message(format!(
-                "Failure to open IPv4 sockets: {e4}\nmtr-packet: Failure to open IPv6 sockets: {e6}"
+                "Failure to open IPv4 sockets: {e4}\n{}: Failure to open IPv6 sockets: {e6}",
+                crate::PROGRAM
             )));
         }
         Ok(LinuxBackend {

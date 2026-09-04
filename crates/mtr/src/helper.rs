@@ -221,6 +221,25 @@ async fn check(
     }
 }
 
+/// The two ways to let the helper open probe sockets, for the failures that mean it could not:
+/// the `permission-denied` fatal, the startup check (the helper died opening its sockets) and an
+/// unsupported `ip-4`/`ip-6` (that family's socket never opened). Without `cap_net_raw` the helper
+/// falls back to unprivileged DGRAM ICMP, which the kernel only allows to gids inside
+/// `net.ipv4.ping_group_range` — so `setcap` alone is not the whole story.
+pub fn privilege_hint(err: &str) -> Option<String> {
+    let socket_failure = err == fatal_message(&ResponseKind::PermissionDenied)?
+        || err == HelperError::StartupCheck.to_string()
+        || err == HelperError::Unsupported(Feature::Ip4).to_string()
+        || err == HelperError::Unsupported(Feature::Ip6).to_string();
+    if !socket_failure {
+        return None;
+    }
+    Some(format!(
+        "hint: raw sockets need a capability: sudo setcap cap_net_raw+ep \"$(command -v {HELPER})\"\n\
+         hint: or allow unprivileged ICMP for your group: sudo sysctl -w net.ipv4.ping_group_range=\"0 2147483647\""
+    ))
+}
+
 /// The replies `handle_reply_errors()` (cmdpipe.c:690-728) treats as fatal, with its messages.
 pub fn fatal_message(kind: &ResponseKind) -> Option<&'static str> {
     Some(match kind {
@@ -380,6 +399,47 @@ mod tests {
             c.iter().position(|p| p == &PathBuf::from("mtr-packet")),
             Some(c.len() - 1)
         );
+    }
+
+    #[test]
+    fn privilege_hint_names_both_fixes_for_every_socket_failure() {
+        for msg in [
+            fatal_message(&ResponseKind::PermissionDenied)
+                .unwrap()
+                .to_string(),
+            HelperError::StartupCheck.to_string(),
+            HelperError::Unsupported(Feature::Ip4).to_string(),
+            HelperError::Unsupported(Feature::Ip6).to_string(),
+        ] {
+            let hint = privilege_hint(&msg).unwrap_or_else(|| panic!("no hint for {msg:?}"));
+            let lines: Vec<&str> = hint.lines().collect();
+            assert_eq!(lines.len(), 2, "{hint}");
+            assert!(lines[0].contains("setcap cap_net_raw+ep"), "{hint}");
+            assert!(lines[0].contains(HELPER), "{hint}");
+            assert!(
+                lines[1].contains("net.ipv4.ping_group_range=\"0 2147483647\""),
+                "{hint}"
+            );
+            assert!(lines.iter().all(|l| l.starts_with("hint: ")), "{hint}");
+        }
+    }
+
+    #[test]
+    fn privilege_hint_stays_quiet_for_unrelated_failures() {
+        for msg in [
+            fatal_message(&ResponseKind::ProbesExhausted)
+                .unwrap()
+                .to_string(),
+            fatal_message(&ResponseKind::AddressInUse)
+                .unwrap()
+                .to_string(),
+            HelperError::Unsupported(Feature::Sctp).to_string(),
+            HelperError::Unsupported(Feature::Mark).to_string(),
+            "unexpected packet generator exit".to_string(),
+            String::new(),
+        ] {
+            assert_eq!(privilege_hint(&msg), None, "{msg}");
+        }
     }
 
     #[test]
