@@ -519,8 +519,8 @@ impl Args {
                 "dueTTL({due_ttl}) cannot be larger than maxTTL({max_ttl})."
             ));
         }
-        // C (mtr.c:742-747) silently clamps maxUnknown < 1 to 1 and has no upper bound; rejecting
-        // is clearer and keeps the value inside the u32 the engine holds.
+        // Deviation 35: C (mtr.c:742-747) silently clamps maxUnknown < 1 to 1 and has no upper
+        // bound; rejecting is clearer and keeps the value inside the u32 the engine holds.
         let max_unknown = match self.max_unknown {
             u if (1..=i64::from(i32::MAX)).contains(&u) => u as u32,
             _ => return Err("max unknown must be between 1 and 2147483647".to_string()),
@@ -582,7 +582,8 @@ impl Args {
             None => 0,
             Some(m) => u32::try_from(m).map_err(|_| "mark must be between 0 and 4294967295")?,
         };
-        // C (mtr.c:678-681) parses -c into an int MaxPing with no range check; 0 keeps C's
+        // Deviation 35: C (mtr.c:678-681) parses -c into an int MaxPing with no range check and
+        // accepts a negative count; we reject anything outside 0..=INT_MAX. 0 keeps C's
         // "run forever in interactive mode" meaning.
         let max_ping = match self.report_cycles {
             None => 10,
@@ -1173,6 +1174,22 @@ mod tests {
             .into_options(true)
             .unwrap();
         assert_eq!(o.targets[0].name, "example.com");
+    }
+
+    /// C uses getopt(3), where `-m -4` takes `-4` as the *value* of `-m`: the family flag is
+    /// consumed, `atoi("-4")` gives -4 and mtr.c:733-741 clamps it to 1. `allow_negative_numbers`
+    /// reproduces that exactly; pinned here so it stays deliberate rather than incidental.
+    #[test]
+    fn numeric_options_consume_a_following_family_flag_as_c_getopt_does() {
+        let o = parse(&["-m", "-4", "host"]).into_options(true).unwrap();
+        assert_eq!(o.config.max_ttl, 1);
+        assert_eq!(o.af, AddressFamily::Unspec);
+        assert_eq!(o.targets[0].name, "host");
+        // Deviation 35: the same swallowing on a range-checked option is an error, not a clamp.
+        assert_eq!(
+            parse(&["-c", "-1", "host"]).into_options(true).unwrap_err(),
+            "report cycles must be between 0 and 2147483647"
+        );
     }
 
     #[test]

@@ -11,6 +11,11 @@ use crate::names::{addr_name, hop_name};
 
 /// RFC 4180 quoting for one field. Deviation 31: C writes names verbatim; a PTR record with a
 /// comma would shift every later column.
+///
+/// Quoting fixes CSV *structure* only. A field that starts with `=`, `+`, `-` or `@` is left
+/// alone deliberately: neutralising spreadsheet formulas (a leading `'`, or a tab) is an import
+/// concern of one class of consumer and would alter the data for everyone else, so mtr CSV is
+/// data to be parsed, not a file to double-click into a spreadsheet.
 pub fn csv_field(s: &str) -> Cow<'_, str> {
     if !s.contains([',', '"', '\r', '\n']) {
         return Cow::Borrowed(s);

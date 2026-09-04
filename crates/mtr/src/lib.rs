@@ -95,9 +95,11 @@ fn targets_to_run(mode: OutputMode, targets: &[Target]) -> &[Target] {
     }
 }
 
-/// ui/mtr.c:1238-1245: a target that does not resolve ends an interactive run; the report
-/// modes skip it and carry on with exit status 1.
-fn resolve_failure_is_fatal(mode: OutputMode) -> bool {
+/// ui/mtr.c:1238-1250: any per-target failure — name resolution, source-address validation,
+/// interface lookup, route discovery (`net_open()`) or starting the probe helper — ends an
+/// interactive run, while the report modes print the message, skip the target and carry on with
+/// exit status 1.
+fn target_failure_is_fatal(mode: OutputMode) -> bool {
     mode == OutputMode::Tui
 }
 
@@ -215,18 +217,28 @@ pub async fn run(argv: Vec<String>) -> i32 {
             }
             Err(Fatal::Skip(msg)) => {
                 eprintln!("mtr: {msg}");
-                if resolve_failure_is_fatal(opts.mode) {
+                if target_failure_is_fatal(opts.mode) {
                     return 1;
                 }
                 exit_val = 1;
             }
+            // ui/mtr.c:1238-1250 makes no distinction between the failure kinds: whatever
+            // stops one target is fatal in the interactive display and a skip in the report
+            // modes. `Fatal::Abort` covers source-address validation, interface lookup, route
+            // discovery and the helper handshake; a helper that will not start simply fails
+            // again for the next target, which costs one more message and no output.
             Err(Fatal::Abort(msg)) => {
                 eprintln!("mtr: {msg}");
                 if msg == helper::fatal_message(&mtr_proto::ResponseKind::PermissionDenied).unwrap()
                 {
                     eprintln!("mtr: hint: sudo setcap cap_net_raw+ep \"$(command -v mtr-packet)\"");
                 }
-                return 1;
+                if target_failure_is_fatal(opts.mode) {
+                    return 1;
+                }
+                // Fall through to the trailing `wrap_documents` print: the documents already
+                // rendered for earlier targets reached stdout before this branch existed.
+                exit_val = 1;
             }
         }
     }
@@ -389,8 +401,8 @@ mod tests {
         assert_eq!(super::targets_to_run(OutputMode::Tui, &all).len(), 1);
         assert_eq!(super::targets_to_run(OutputMode::Report, &all).len(), 2);
         assert_eq!(super::targets_to_run(OutputMode::Json, &all).len(), 2);
-        assert!(super::resolve_failure_is_fatal(OutputMode::Tui));
-        assert!(!super::resolve_failure_is_fatal(OutputMode::Csv));
+        assert!(super::target_failure_is_fatal(OutputMode::Tui));
+        assert!(!super::target_failure_is_fatal(OutputMode::Csv));
     }
 
     #[test]
