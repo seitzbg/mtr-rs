@@ -197,4 +197,3 @@ In `cargo test` only
    for the tag. A `workflow_dispatch` run with `dry_run: "true"` builds the same artifacts, uploads
    them as workflow artifacts, and creates no release.
 
-Design: `docs/superpowers/specs/`. Plans: `docs/superpowers/plans/`.
