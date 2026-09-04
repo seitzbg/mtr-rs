@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/mtr-proto", "crates/mtr-core", "crates/mtr", "crates/mtr-packet"]
+members = ["crates/mtr-proto", "crates/mtr-core", "crates/mtr", "crates/mtr-packet", "xtask"]
 exclude = ["crates/mtr-proto/fuzz"]
 
 [workspace.package]
@@ -31,3 +31,5 @@ insta = "1"
 caps = "0.5"
 serde = { version = "1", features = ["derive"] }
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+clap_mangen = "0.3"
+clap_complete = "4"
