@@ -149,17 +149,25 @@ pub mod addr {
     /// `find_source_addr()` (probe.c:333-404): connect a UDP socket to `dest:1` and read the
     /// local address back; Linux tolerates `EHOSTUNREACH` by falling back to the unspecified
     /// address so an unreachable target can still be probed.
+    ///
+    /// Every other failure — the `socket()`, the `connect()`, the `getsockname()` — is a `-1`
+    /// return from `find_source_addr()`, which `resolve_probe_addresses()` (probe.c:95-120)
+    /// passes on to `send_probe()`, and `send_probe()` answers with a bare `invalid-argument`
+    /// without ever looking at `errno` (probe_unix.c:571-575). So we discard the errno too and
+    /// report `EINVAL`, which `report_packet_error()` maps to the same reply.
     pub fn find_source_addr(dest: IpAddr) -> std::io::Result<IpAddr> {
         let unspecified: IpAddr = if dest.is_ipv6() {
             Ipv6Addr::UNSPECIFIED.into()
         } else {
             Ipv4Addr::UNSPECIFIED.into()
         };
-        let sock = std::net::UdpSocket::bind(SocketAddr::new(unspecified, 0))?;
+        let einval = || std::io::Error::from_raw_os_error(nix::libc::EINVAL);
+        let sock =
+            std::net::UdpSocket::bind(SocketAddr::new(unspecified, 0)).map_err(|_| einval())?;
         match sock.connect(SocketAddr::new(dest, 1)) {
-            Ok(()) => Ok(sock.local_addr()?.ip()),
+            Ok(()) => sock.local_addr().map(|a| a.ip()).map_err(|_| einval()),
             Err(e) if e.raw_os_error() == Some(nix::libc::EHOSTUNREACH) => Ok(unspecified),
-            Err(e) => Err(e),
+            Err(_) => Err(einval()),
         }
     }
 }
@@ -260,5 +268,11 @@ mod tests {
             addr::find_source_addr("127.0.0.1".parse().unwrap()).unwrap(),
             "127.0.0.1".parse::<IpAddr>().unwrap()
         );
+        // Reserved class E: routable on some boxes, ENETUNREACH on others. Whatever the
+        // kernel says, the only errno we ever surface is EINVAL, because C answers a bare
+        // `invalid-argument` for any non-EHOSTUNREACH failure here (probe_unix.c:571-575).
+        if let Err(e) = addr::find_source_addr("240.0.0.1".parse().unwrap()) {
+            assert_eq!(e.raw_os_error(), Some(nix::libc::EINVAL), "{e}");
+        }
     }
 }

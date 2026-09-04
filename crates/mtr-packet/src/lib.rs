@@ -53,6 +53,42 @@ pub fn set_nonblocking(fd: BorrowedFd<'_>) -> nix::Result<()> {
     fcntl(fd, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK)).map(|_| ())
 }
 
+/// Write one response. stdout is left **blocking** (only stdin gets `O_NONBLOCK`), exactly as
+/// in C, so this normally never sees `WouldBlock`; but the fd is inherited from whoever spawned
+/// us and may already carry `O_NONBLOCK`. Dropping the reply there would silently lose it, so
+/// we retry the unwritten tail instead. Partial writes are tracked by hand: `write_all()`
+/// restarts the whole slice after a `WouldBlock`, which would duplicate bytes on the wire.
+fn write_blocking<W: Write>(out: &mut W, mut bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::ErrorKind;
+    while !bytes.is_empty() {
+        match out.write(bytes) {
+            Ok(0) => return Err(ErrorKind::WriteZero.into()),
+            Ok(n) => bytes = &bytes[n..],
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// `fflush(stdout)` (packet.c:133), with the same `WouldBlock` retry as `write_blocking`. A
+/// `BufWriter` keeps whatever it could not write, so retrying the flush never duplicates.
+fn flush_blocking<W: Write>(out: &mut W) -> std::io::Result<()> {
+    use std::io::ErrorKind;
+    loop {
+        match out.flush() {
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            other => return other,
+        }
+    }
+}
+
 /// The main loop of packet.c:131-167: flush, wait, receive replies, read commands, expire
 /// timeouts, dispatch, and leave once stdin is closed and nothing is outstanding.
 pub fn serve<B: ProbeBackend, W: Write>(
@@ -93,9 +129,9 @@ pub fn serve<B: ProbeBackend, W: Write>(
             .receive(&mut helper.table, now, &mut responses);
         if let Some(fatal) = helper.backend.take_fatal() {
             for r in responses.drain(..) {
-                let _ = output.write_all(r.encode().as_bytes());
+                let _ = write_blocking(output, r.encode().as_bytes());
             }
-            let _ = output.flush();
+            let _ = flush_blocking(output);
             return Err(fatal);
         }
         if pipe_open {
@@ -123,11 +159,11 @@ pub fn serve<B: ProbeBackend, W: Write>(
             });
         }
         for r in responses.drain(..) {
-            if output.write_all(r.encode().as_bytes()).is_err() {
+            if write_blocking(output, r.encode().as_bytes()).is_err() {
                 return Ok(()); // deviation 29: the client is gone
             }
         }
-        if output.flush().is_err() {
+        if flush_blocking(output).is_err() {
             return Ok(());
         }
         if !pipe_open && helper.table.is_empty() {

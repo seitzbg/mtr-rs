@@ -14,16 +14,23 @@ pub const ICMP_ECHO: u8 = 8;
 pub const ICMP6_ECHO: u8 = 128;
 const MIN_UNPRIVILEGED_PORT: u32 = 1024;
 const UDP_PORT_RANGE: u32 = 65536;
+/// `PACKET_BUFFER_SIZE` (probe.h:40) — the "jumbo" frame-sized stack buffer C builds every
+/// probe into (probe_unix.c:563, 591). `construct_packet()` rejects a probe whose computed
+/// size does not fit it: `if (packet_buffer_size < packet_size) { errno = EINVAL; return -1; }`
+/// (construct_unix.c:847-850), which `send_probe()` turns into `invalid-argument`.
+pub const PACKET_BUFFER_SIZE: usize = 9000;
 
 /// `compute_checksum()` (construct_unix.c:58-89): 16-bit one's-complement sum, odd trailing
-/// byte in the high half.
+/// byte in the high half. C accumulates into a `uint32_t`, which cannot overflow for the
+/// ≤ `PACKET_BUFFER_SIZE` bytes it is ever handed; we accumulate into a `u64` so that no
+/// slice length can overflow the accumulator regardless of the caller.
 pub fn checksum(bytes: &[u8]) -> u16 {
-    let mut sum: u32 = 0;
+    let mut sum: u64 = 0;
     for (i, b) in bytes.iter().enumerate() {
         sum += if i % 2 == 0 {
-            u32::from(*b) << 8
+            u64::from(*b) << 8
         } else {
-            u32::from(*b)
+            u64::from(*b)
         };
     }
     while sum >> 16 != 0 {
@@ -53,6 +60,11 @@ pub fn packet_size(params: &CProbeParams, is_raw: bool) -> Option<usize> {
     }
     if params.ip_version == 6 && is_raw {
         size -= IP6_HEADER; // the kernel prepends it
+    }
+    // construct_unix.c:847-850: the packet has to fit C's PACKET_BUFFER_SIZE buffer, and the
+    // check is against the *final* size (so an IPv6 raw probe may ask for 9040).
+    if size > PACKET_BUFFER_SIZE {
+        return None;
     }
     Some(size)
 }
@@ -183,6 +195,45 @@ mod tests {
         assert_eq!(checksum(&[]), 0xFFFF);
         assert_eq!(checksum(&[0xFF, 0xFF]), 0x0000);
         assert_eq!(checksum(&[0x01]), !0x0100u16); // odd length: last byte is the high byte
+    }
+
+    /// The accumulator must survive any slice the caller can hand us: 64 KiB of 0xFF sums to
+    /// 0xFF00 * 32768 + 0xFF * 32768 ≈ 2^31, which overflows a `u32` in debug builds.
+    #[test]
+    fn checksum_does_not_overflow_on_a_large_buffer() {
+        let big = vec![0xFFu8; 64 * 1024];
+        // Every 16-bit word is 0xFFFF, i.e. -0 in one's complement, so the folded sum is
+        // 0xFFFF and the complement is 0.
+        assert_eq!(checksum(&big), 0);
+        let mut mixed = vec![0xFFu8; 64 * 1024];
+        mixed[0] = 0;
+        assert_eq!(checksum(&mixed), 0xFF00);
+    }
+
+    /// construct_unix.c:847-850 with probe.h:40: a probe larger than the 9000-byte buffer is
+    /// EINVAL, which `send_probe()` reports as `invalid-argument`.
+    #[test]
+    fn sizes_above_the_packet_buffer_are_rejected() {
+        let mut p = CProbeParams {
+            ip_version: 4,
+            packet_size: PACKET_BUFFER_SIZE as i32,
+            ..Default::default()
+        };
+        assert_eq!(packet_size(&p, true), Some(PACKET_BUFFER_SIZE));
+        assert_eq!(packet_size(&p, false), Some(PACKET_BUFFER_SIZE));
+        p.packet_size += 1;
+        assert_eq!(packet_size(&p, true), None);
+        assert_eq!(packet_size(&p, false), None);
+        p.packet_size = 200_000;
+        assert_eq!(packet_size(&p, false), None);
+        p.packet_size = i32::MAX;
+        assert_eq!(packet_size(&p, false), None);
+        // IPv6 raw hands the kernel the payload only, so the 40-byte header it prepends is
+        // subtracted again before the buffer check — 9040 requested still fits.
+        p.ip_version = 6;
+        p.packet_size = (PACKET_BUFFER_SIZE + IP6_HEADER) as i32;
+        assert_eq!(packet_size(&p, true), Some(PACKET_BUFFER_SIZE));
+        assert_eq!(packet_size(&p, false), None);
     }
 
     #[test]

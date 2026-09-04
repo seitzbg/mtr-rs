@@ -28,14 +28,12 @@ use super::ProbeBackend;
 use crate::Fatal;
 use crate::probe_table::{MAX_PORT, MIN_PORT, Probe, ProbeTable, addr, rtt_us};
 use construct::{
-    UDP_HEADER, icmp_echo, packet_size, udp_datagram, udp_ports, udp_source_port_from_pid,
+    PACKET_BUFFER_SIZE, UDP_HEADER, icmp_echo, packet_size, udp_datagram, udp_ports,
+    udp_source_port_from_pid,
 };
 use deconstruct::{Inner, Parsed, match_reply, parse_icmp4, parse_icmp6};
 use errqueue::QueuedError;
 use sockets::{Family, apply_probe_options};
-
-/// `PACKET_BUFFER_SIZE` (probe.h:40).
-pub const PACKET_BUFFER_SIZE: usize = 9000;
 
 pub struct LinuxBackend {
     pub v4: Option<Family>,
@@ -661,6 +659,35 @@ mod tests {
         assert!(t.is_empty());
     }
 
+    /// probe.h:40 + construct_unix.c:847-850: a `size` that does not fit C's 9000-byte packet
+    /// buffer is EINVAL — `invalid-argument` on the wire — and never allocates a buffer or
+    /// runs the checksum over one. `size 9000` is still accepted.
+    #[test]
+    fn sizes_beyond_the_packet_buffer_are_invalid_arguments() {
+        let Some(mut b) = backend(4) else { return };
+        let mut t = ProbeTable::new();
+        let params = |size: i32, pattern: i32| CProbeParams {
+            ip_version: 4,
+            remote_address: Some("127.0.0.1".into()),
+            packet_size: size,
+            bit_pattern: pattern,
+            ..Default::default()
+        };
+        for (size, pattern) in [(9001, 1), (200_000, 255), (i32::MAX, 1)] {
+            let i = t.alloc(7, Instant::now(), 1).unwrap();
+            let err = b
+                .send_probe(&mut t, i, &params(size, pattern))
+                .expect_err("size beyond PACKET_BUFFER_SIZE must fail");
+            assert_eq!(err.raw_os_error(), Some(nix::libc::EINVAL), "size {size}");
+            t.remove(i);
+        }
+        let i = t.alloc(8, Instant::now(), 5).unwrap();
+        b.send_probe(&mut t, i, &params(9000, 255))
+            .expect("9000 bytes is exactly the buffer size");
+        let out = pump(&mut b, &mut t, Duration::from_secs(3), |o| !o.is_empty());
+        assert!(!out.is_empty(), "a 9000-byte echo to loopback is answered");
+    }
+
     #[test]
     fn icmpv4_to_a_blackhole_times_out_with_no_reply() {
         let Some(mut b) = backend(4) else { return };
@@ -685,11 +712,13 @@ mod tests {
                 );
             }
             Err(e) => {
-                // No default route in the sandbox: C reports the errno name; that is also fine.
+                // No default route in the sandbox. `sendto()` reports its own errno; a
+                // `find_source_addr()` failure is flattened to EINVAL, as C reports a bare
+                // `invalid-argument` there (probe.c:333-404, probe_unix.c:571-575).
                 assert!(
                     matches!(
                         e.raw_os_error(),
-                        Some(nix::libc::ENETUNREACH | nix::libc::EHOSTUNREACH)
+                        Some(nix::libc::ENETUNREACH | nix::libc::EHOSTUNREACH | nix::libc::EINVAL)
                     ),
                     "{e}"
                 );
@@ -795,7 +824,7 @@ mod tests {
             Err(e) => assert!(
                 matches!(
                     e.raw_os_error(),
-                    Some(nix::libc::ENETUNREACH | nix::libc::EHOSTUNREACH)
+                    Some(nix::libc::ENETUNREACH | nix::libc::EHOSTUNREACH | nix::libc::EINVAL)
                 ),
                 "{e}"
             ),
@@ -918,9 +947,12 @@ mod tests {
         let mut t = ProbeTable::new();
         let i = t.alloc(90, Instant::now(), 3).unwrap();
         let seq = t.probes[i].sequence;
-        // Occupy local:seq so the first attempt's bind() fails with EADDRINUSE. If some other
-        // process already holds it, so much the better — the retry is what is under test.
-        let blocker = std::net::TcpListener::bind(("127.0.0.1", seq)).ok();
+        // Occupy local:seq so the first attempt's bind() fails with EADDRINUSE. If the bind
+        // loses to a sibling socket that set SO_REUSEPORT, the port is not reliably blocked and
+        // the retry under test would not be triggered, so give up rather than fail spuriously.
+        let Ok(blocker) = std::net::TcpListener::bind(("127.0.0.1", seq)) else {
+            return;
+        };
         let dest = i32::from(listener.local_addr().unwrap().port());
         b.send_probe(&mut t, i, &tcp("127.0.0.1", 4, dest)).unwrap();
         assert_ne!(

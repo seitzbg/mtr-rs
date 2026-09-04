@@ -10,6 +10,9 @@ use crate::probe_table::ProbeTable;
 
 /// `MAX_MPLS_LABELS` (deconstruct_unix.c:28).
 pub const MAX_MPLS_LABELS: usize = 8;
+/// The reply encoder sizes its label array from `mtr_proto::MAX_LABELS`; the two must agree or
+/// a decoded label could be dropped (or the encoder overrun its own bound) silently.
+const _: () = assert!(MAX_MPLS_LABELS == mtr_proto::MAX_LABELS);
 /// `ICMP_ORIGINAL_DATAGRAM_MIN_SIZE` (protocols.h:44).
 const ICMP_ORIGINAL_DATAGRAM_MIN_SIZE: usize = 128;
 /// `sizeof(struct ICMPExtensionHeader)` / `sizeof(struct ICMPExtensionObject)`, both 4 bytes
@@ -283,6 +286,13 @@ pub fn match_reply(
 /// require the ports (and, when an inner IP header was available, the addresses) to be the
 /// probe's own. The DGRAM error queue passes `addrs: None` because it hands back only the
 /// 8-byte header we built, with no inner IP header (Task 12, deviation 26).
+///
+/// Only the *first* of the three candidate sequence numbers that names a live probe is
+/// validated; if it does not check out, the reply is dropped rather than the next candidate
+/// tried. This is faithful to C's `handle_inner_udp_packet()` (deconstruct_unix.c:63-121),
+/// which builds one `probe` from the same ordered guesses and then returns on the first
+/// mismatch. A fixed `dest-port` that happens to equal another outstanding probe's sequence
+/// therefore shadows the true match in C exactly as it does here.
 pub fn match_udp(
     table: &ProbeTable,
     src_port: u16,
