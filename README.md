@@ -91,6 +91,7 @@ The file only supplies defaults. Precedence, lowest to highest:
 
     [probe]
     interval = 1.0                           # -i
+    gracetime = 5.0                          # -G
     max_ttl = 30                             # -m
     max_unknown = 12                         # -U
     timeout = 10                             # -Z

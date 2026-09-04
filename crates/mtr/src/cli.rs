@@ -71,6 +71,22 @@ pub fn packet_size_in_range(n: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// Upper bound for user-supplied seconds: one year. Anything larger is a typo or an attack on the
+/// f64 → Duration conversions downstream.
+pub const MAX_SECONDS: f64 = 86_400.0 * 365.0;
+
+/// Shared check for every "seconds" value (`-i`, `-G`, the config file, the TUI prompt):
+/// finite, positive and bounded.
+pub fn validate_seconds(what: &str, v: f64) -> Result<(), String> {
+    if !v.is_finite() || v <= 0.0 {
+        return Err(format!("{what} must be positive"));
+    }
+    if v > MAX_SECONDS {
+        return Err(format!("{what} is too large"));
+    }
+    Ok(())
+}
+
 fn parse_port(s: &str) -> Result<u16, String> {
     let n = parse_c_long(s)?;
     if !(1..=65535).contains(&n) {
@@ -447,15 +463,11 @@ impl Args {
         if !(0..=255).contains(&self.tos) {
             return Err(format!("value out of range (0 - 255): {}", self.tos));
         }
-        if self.interval <= 0.0 {
-            return Err("wait time must be positive".to_string());
-        }
+        validate_seconds("wait time", self.interval)?;
         if !is_root && self.interval < 1.0 {
             return Err("non-root users cannot request an interval < 1.0 seconds".to_string());
         }
-        if self.gracetime <= 0.0 {
-            return Err("grace time must be positive".to_string());
-        }
+        validate_seconds("grace time", self.gracetime)?;
         if self.cache.is_some_and(|c| c <= 0) {
             return Err("cache timeout must be positive".to_string());
         }
@@ -642,6 +654,27 @@ mod tests {
 
     fn opts(args: &[&str]) -> Result<Options, String> {
         parse(args).into_options(false)
+    }
+
+    #[test]
+    fn non_finite_and_huge_seconds_are_rejected() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+            assert_eq!(
+                validate_seconds("wait time", bad),
+                Err("wait time must be positive".to_string()),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            validate_seconds("grace time", 1e300),
+            Err("grace time is too large".to_string())
+        );
+        assert_eq!(validate_seconds("wait time", 0.5), Ok(()));
+        // Through the parser: `-i inf` and `-G nan` are refused at the command line.
+        let err = parse(&["-i", "inf", "h"]).into_options(true).unwrap_err();
+        assert_eq!(err, "wait time must be positive");
+        let err = parse(&["-G", "nan", "h"]).into_options(true).unwrap_err();
+        assert_eq!(err, "grace time must be positive");
     }
 
     #[test]
