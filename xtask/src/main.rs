@@ -33,7 +33,7 @@ enum Cmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Release build + man + completions laid out under target/dist/<version>-<arch>/
+    /// Release build + man + completions laid out under target/dist/mtr-rs-<version>-<arch>/
     Dist {
         /// Reuse the existing target/release binaries instead of running cargo build
         #[arg(long)]
@@ -59,9 +59,14 @@ pub fn arch() -> &'static str {
     std::env::consts::ARCH
 }
 
+/// The tarball's top-level directory (and, with `.tar.gz` appended, the tarball's own name).
 pub fn dist_dir_name() -> String {
-    format!("{}-{}", version(), arch())
+    format!("mtr-rs-{}-{}", version(), arch())
 }
+
+/// Repository files copied verbatim into the root of the dist tree. GPL-2.0 §1/§3 require the
+/// licence to travel with the binaries, so the tarball is not just bin/man/completions.
+pub const DIST_DOCS: [&str; 2] = ["LICENSE", "README.md"];
 
 /// The `.TH` date field: `SOURCE_DATE_EPOCH` (seconds since the Unix epoch, for reproducible
 /// builds) if set, else today's UTC date. Either way, deterministic for a given environment.
@@ -148,6 +153,12 @@ fn dist(no_build: bool) -> anyhow::Result<()> {
         let from = root.join("target/release").join(bin);
         let to = dist.join("bin").join(bin);
         fs::create_dir_all(to.parent().unwrap())?;
+        fs::copy(&from, &to)
+            .with_context(|| format!("copy {} -> {}", from.display(), to.display()))?;
+    }
+    for doc in DIST_DOCS {
+        let from = root.join(doc);
+        let to = dist.join(doc);
         fs::copy(&from, &to)
             .with_context(|| format!("copy {} -> {}", from.display(), to.display()))?;
     }
@@ -255,7 +266,22 @@ mod tests {
     #[test]
     fn dist_layout_names_are_stable() {
         assert!(matches!(arch(), "x86_64" | "aarch64" | "arm" | "riscv64"));
-        assert_eq!(dist_dir_name(), format!("{}-{}", version(), arch()));
+        assert_eq!(dist_dir_name(), format!("mtr-rs-{}-{}", version(), arch()));
+        assert!(dist_dir_name().starts_with("mtr-rs-"));
+    }
+
+    #[test]
+    fn the_dist_tree_ships_the_licence_and_readme_next_to_the_binaries() {
+        assert_eq!(DIST_DOCS, ["LICENSE", "README.md"]);
+        for doc in DIST_DOCS {
+            let path = repo_root().join(doc);
+            assert!(path.is_file(), "dist would copy a missing {doc}");
+        }
+        let licence = fs::read_to_string(repo_root().join("LICENSE")).unwrap();
+        assert!(
+            licence.contains("GNU GENERAL PUBLIC LICENSE"),
+            "LICENSE is not the GPL text"
+        );
     }
 
     #[test]

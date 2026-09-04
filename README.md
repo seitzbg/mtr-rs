@@ -12,11 +12,13 @@ pages and completions, and scripts/install.sh.
 
 ## Installation
 
-From a release. The tarball unpacks to `<version>-<arch>/{bin,man,completions}`:
+From a release. The tarball unpacks to a single `mtr-rs-<version>-<arch>/` directory holding
+`bin/`, `man/`, `completions/` and the `LICENSE` and `README.md`:
 
     tar xzf mtr-rs-0.1.0-x86_64.tar.gz
-    sudo install -m 755 0.1.0-x86_64/bin/mtr 0.1.0-x86_64/bin/mtr-packet /usr/local/bin/
-    sudo install -m 644 0.1.0-x86_64/man/*.8 /usr/local/share/man/man8/
+    cd mtr-rs-0.1.0-x86_64
+    sudo install -m 755 bin/mtr bin/mtr-packet /usr/local/bin/
+    sudo install -m 644 man/*.8 /usr/local/share/man/man8/
     sudo setcap cap_net_raw+ep /usr/local/bin/mtr-packet
 
 On Debian and Ubuntu the `.deb` installs the same files and runs `setcap` from its `postinst`:

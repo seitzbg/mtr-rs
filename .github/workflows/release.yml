@@ -53,7 +53,8 @@ jobs:
         run: |
           version=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           mkdir -p out
-          tar -C target/dist -czf "out/mtr-rs-${version}-${{ matrix.arch }}.tar.gz" "${version}-${{ matrix.arch }}"
+          dir="mtr-rs-${version}-${{ matrix.arch }}"
+          tar -C target/dist -czf "out/${dir}.tar.gz" "$dir"
           cp target/debian/mtr-rs_${version}-1_${{ matrix.debarch }}.deb out/
           ls -l out
       - uses: actions/upload-artifact@v4
