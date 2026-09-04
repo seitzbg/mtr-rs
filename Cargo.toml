@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/mtr-proto", "crates/mtr-core", "crates/mtr", "crates/mtr-packet", "xtask"]
-exclude = ["crates/mtr-proto/fuzz"]
+exclude = ["crates/mtr-proto/fuzz", "crates/mtr-packet/fuzz"]
 
 [workspace.package]
 version = "0.1.0"

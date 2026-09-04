@@ -1,0 +1,36 @@
+# Its own workspace (nightly-only deps), like crates/mtr-proto/fuzz.
+[workspace]
+
+[package]
+name = "mtr-packet-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mtr-packet = { path = ".." }
+
+[[bin]]
+name = "parse_icmp4"
+path = "fuzz_targets/parse_icmp4.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_icmp6"
+path = "fuzz_targets/parse_icmp6.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_mpls"
+path = "fuzz_targets/decode_mpls.rs"
+test = false
+doc = false
+bench = false
