@@ -135,7 +135,28 @@ fn dist(no_build: bool) -> anyhow::Result<()> {
     }
     man(&dist.join("man"))?;
     completions(&dist.join("completions"))?;
+    // Also mirror into flat, version/arch-independent paths: packaging (cargo-deb's
+    // `[package.metadata.deb] assets`) needs stable source paths it can reference from
+    // `crates/mtr/Cargo.toml`, whereas `dist` itself is versioned for the tarball layout.
+    mirror_flat(&dist.join("man"), &root.join("target/dist/man"))?;
+    mirror_flat(
+        &dist.join("completions"),
+        &root.join("target/dist/completions"),
+    )?;
     println!("{}", dist.display());
+    Ok(())
+}
+
+/// Copy the (flat, non-recursive) contents of `from` into `to`, replacing `to` entirely.
+fn mirror_flat(from: &Path, to: &Path) -> anyhow::Result<()> {
+    let _ = fs::remove_dir_all(to);
+    fs::create_dir_all(to).with_context(|| format!("mkdir -p {}", to.display()))?;
+    for entry in fs::read_dir(from).with_context(|| format!("read_dir {}", from.display()))? {
+        let entry = entry?;
+        let dest = to.join(entry.file_name());
+        fs::copy(entry.path(), &dest)
+            .with_context(|| format!("copy {} -> {}", entry.path().display(), dest.display()))?;
+    }
     Ok(())
 }
 
@@ -199,5 +220,40 @@ mod tests {
     fn dist_layout_names_are_stable() {
         assert!(matches!(arch(), "x86_64" | "aarch64" | "arm" | "riscv64"));
         assert_eq!(dist_dir_name(), format!("{}-{}", version(), arch()));
+    }
+
+    #[test]
+    fn mirror_flat_replaces_the_destination_with_the_sources_contents() {
+        let base = std::env::temp_dir().join(format!(
+            "mtr-xtask-mirror-flat-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let from = base.join("versioned/man");
+        let to = base.join("flat/man");
+        fs::create_dir_all(&from).unwrap();
+        write(&from.join("mtr.8"), b"stale-should-be-replaced").unwrap();
+        // A pre-existing file under `to` that isn't in `from` must not survive the mirror.
+        fs::create_dir_all(&to).unwrap();
+        write(&to.join("leftover.8"), b"leftover").unwrap();
+        write(&from.join("mtr.8"), b"man page body").unwrap();
+        write(&from.join("mtr-packet.8"), b"helper man page body").unwrap();
+
+        mirror_flat(&from, &to).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(to.join("mtr.8")).unwrap(),
+            "man page body"
+        );
+        assert_eq!(
+            fs::read_to_string(to.join("mtr-packet.8")).unwrap(),
+            "helper man page body"
+        );
+        assert!(!to.join("leftover.8").exists(), "stale file not removed");
+
+        fs::remove_dir_all(&base).unwrap();
     }
 }

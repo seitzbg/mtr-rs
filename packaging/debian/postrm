@@ -1,0 +1,4 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Nothing to undo: dpkg removes the files, and the capability lives on the removed binary.
+exit 0

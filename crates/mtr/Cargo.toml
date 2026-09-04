@@ -32,3 +32,35 @@ toml.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+
+# Debian package: `cargo deb -p mtr --no-build` after `cargo xtask dist --no-build`.
+# `cargo xtask dist` writes the man pages and completions into a versioned
+# `target/dist/<version>-<arch>/` tarball layout *and* mirrors them into the flat,
+# version/arch-independent `target/dist/man/` and `target/dist/completions/` used below —
+# cargo-deb needs stable source paths it can reference from this Cargo.toml.
+# Source paths other than target/release/* resolve relative to this Cargo.toml (hence ../../).
+[package.metadata.deb]
+name = "mtr-rs"
+maintainer = "Bryan Seitz <bseitz@nvidia.com>"
+copyright = "mtr-rs contributors; a Rust port of mtr (GPL-2.0-only)"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+Rust port of mtr (My TraceRoute) with an interactive terminal UI, the classic
+report/JSON/CSV modes, and a privileged probe helper (mtr-packet) that is
+wire-compatible with mtr 0.96. Installs /usr/bin/mtr and /usr/bin/mtr-packet
+and therefore conflicts with the distribution's mtr packages."""
+section = "net"
+priority = "optional"
+depends = "$auto"
+conflicts = "mtr, mtr-tiny"
+maintainer-scripts = "../../packaging/debian"
+assets = [
+    ["target/release/mtr", "usr/bin/", "755"],
+    ["target/release/mtr-packet", "usr/bin/", "755"],
+    ["../../target/dist/man/mtr.8", "usr/share/man/man8/", "644"],
+    ["../../target/dist/man/mtr-packet.8", "usr/share/man/man8/", "644"],
+    ["../../target/dist/completions/mtr.bash", "usr/share/bash-completion/completions/mtr", "644"],
+    ["../../target/dist/completions/_mtr", "usr/share/zsh/site-functions/_mtr", "644"],
+    ["../../target/dist/completions/mtr.fish", "usr/share/fish/vendor_completions.d/mtr.fish", "644"],
+    ["../../docs/config.example.toml", "usr/share/doc/mtr-rs/config.example.toml", "644"],
+]
