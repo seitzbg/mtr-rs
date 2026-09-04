@@ -135,11 +135,7 @@ async fn ctrl_c_is_interrupted_and_pause_freezes_probing() {
     assert!(s.engine.paused());
     let sent: i32 = s.engine.hops().iter().map(|h| h.transmitted()).sum();
     assert!(sent <= 6, "no probes while paused: {sent}");
-    // The header's `[PAUSED]` marker only fits once the line is wide enough (see
-    // header::tests::the_clock_column_is_reserved_and_the_rest_truncates); at this 80-column
-    // TestBackend the longer `mtr-rs <version>` prefix pushes it past the reserved clock column,
-    // so the pause is read off the status line instead.
-    assert!(s.screen.contains("Paused"), "{}", s.screen);
+    assert!(s.screen.contains("[PAUSED]"), "{}", s.screen);
 }
 
 #[tokio::test]
