@@ -5,11 +5,16 @@
 //!
 //! Unprivileged this asserts the (already empty) sets stay empty; run against a copy carrying
 //! `cap_net_raw+ep` via `MTR_PACKET_UNDER_TEST=/path/to/mtr-packet` and it proves the real
-//! thing. GPL-2.0-only.
+//! thing. Add `MTR_PACKET_EXPECT_NET_ADMIN=1` when that copy also carries `cap_net_admin+ep`,
+//! and the exact surviving set is asserted. GPL-2.0-only.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
+
+/// `CAP_NET_ADMIN` alone, as `/proc/<pid>/status` spells a capability mask: it is bit 12, so
+/// 0x1000.
+const NET_ADMIN_ONLY: &str = "0000000000001000";
 
 /// Every wait in this test is bounded by this: a hung helper must fail the test, not hang
 /// `cargo test --workspace` with no diagnostic.
@@ -91,6 +96,11 @@ fn the_running_helper_holds_no_capabilities_beyond_a_granted_net_admin() {
     // (bit 12, mask 0x1000) is the one capability the drop may keep, and only in the effective
     // and permitted sets, when the file capabilities granted it; the inheritable set is always
     // cleared.
+    //
+    // Unprivileged the test cannot tell which of the two outcomes to demand, so it accepts
+    // either; set `MTR_PACKET_EXPECT_NET_ADMIN=1` when the helper under test really was given
+    // the capability and the positive half of the deviation is asserted exactly, i.e. a helper
+    // that wrongly dropped `CAP_NET_ADMIN` fails here.
     let caps = capabilities_of(pid);
     let value_of = |want: &str| {
         caps.iter()
@@ -104,12 +114,21 @@ fn the_running_helper_holds_no_capabilities_beyond_a_granted_net_admin() {
         "0000000000000000",
         "CapInh of {path} is not empty"
     );
+    let expect_net_admin = std::env::var("MTR_PACKET_EXPECT_NET_ADMIN").is_ok_and(|v| v == "1");
     for want in ["CapEff", "CapPrm"] {
         let value = value_of(want);
-        assert!(
-            value == "0000000000000000" || value == "0000000000001000",
-            "{want} of {path} is {value}, expected empty or cap_net_admin only"
-        );
+        if expect_net_admin {
+            assert_eq!(
+                value, NET_ADMIN_ONLY,
+                "{want} of {path} is {value}, expected cap_net_admin only \
+                 (MTR_PACKET_EXPECT_NET_ADMIN=1)"
+            );
+        } else {
+            assert!(
+                value == "0000000000000000" || value == NET_ADMIN_ONLY,
+                "{want} of {path} is {value}, expected empty or cap_net_admin only"
+            );
+        }
     }
     assert_eq!(
         value_of("CapEff"),

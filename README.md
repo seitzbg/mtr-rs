@@ -127,11 +127,16 @@ really changed, and only then the effective, permitted and inheritable capabilit
 (the order of `drop_elevated_permissions()` in the C `packet/packet.c`). From that point it is an
 ordinary unprivileged process serving requests on the sockets it already holds.
 
-The one exception is `CAP_NET_ADMIN`, which the drop keeps — and keeps *only* when it was actually
-granted, in the effective and permitted sets, never in the inheritable one — because `SO_MARK` is set
-per probe, after the drop. So `-M`/`--mark` needs `cap_net_admin` on the helper, and the client's own
-route lookup (a `connect()` on a marked UDP socket) needs it too, which in practice means running
-`mtr` as root. Grant both capabilities to the helper with:
+The one exception is `CAP_NET_ADMIN`, which the drop keeps — and keeps *only* when the process held it
+going in, in the effective and permitted sets, never in the inheritable one — because `SO_MARK` is set
+per probe, after the drop. That covers a helper given the capability with `setcap` and a helper run as
+root, which holds it by uid; in both cases everything else, `cap_net_raw` included, still goes. So
+`-M`/`--mark` needs `cap_net_admin` on the helper, and the client's own route lookup (a `connect()` on
+a marked UDP socket) needs it too, which in practice means running `mtr` as root. (`CAP_NET_ADMIN` is
+what the kernel checks for `SO_MARK` here; since Linux 5.17 `cap_net_raw` also unlocks it, but the drop
+removes that one. Inside a user namespace whose network namespace belongs to a different user
+namespace, the capability is not enough and `setsockopt` still fails.) Grant both capabilities to the
+helper with:
 
     sudo setcap cap_net_raw,cap_net_admin+ep "$(command -v mtr-packet)"
 
