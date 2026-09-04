@@ -8,6 +8,12 @@ All notable changes to mtr-rs are documented here. The format follows
 
 Nothing yet.
 
+## [0.2.1] - 2026-09-04
+
+### Changed
+- The TUI uses the terminal's named ANSI colours at every colour depth instead of its own muted RGB set on truecolor terminals, so the theme's colours show everywhere and a local terminal and an ssh session look the same.
+- In the Recent sparkline a lost sample is a red floor `▁` flush with the bars (`_` in `--ascii`), so a lossy hop reads as a continuous red line that replies stand out of; without colour the old `•`/`x` mark is kept because the floor would match the lowest RTT bucket. Never-answered hops stay blank (deviation 26 amended).
+
 ## [0.2.0] - 2026-09-04
 
 ### Added
@@ -65,6 +71,7 @@ First release of the Rust port of mtr 0.96 (upstream commit 7b01773).
 - `MTR_RS_LOG` is ignored when `/etc/mtr.is.run.under.sudo` exists and never truncates or follows an existing file (CR-01).
 - GitHub Actions pinned to commit SHAs, read-only tokens except the release publish step, and cargo-deny in CI (CR-07).
 
-[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/seitzbg/mtr-rs/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/seitzbg/mtr-rs/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/seitzbg/mtr-rs/releases/tag/v0.1.0

@@ -232,7 +232,10 @@ pub fn render(view: &View, area: Rect, buf: &mut Buffer) {
                             crate::tui::render::sparkline::Cell::Lost => pal.lost_sample(),
                             crate::tui::render::sparkline::Cell::Pending => Style::new(),
                         };
-                        spans.push(Span::styled(glyph(&c, g), style));
+                        spans.push(Span::styled(
+                            glyph(&c, g, pal.depth == crate::tui::palette::Depth::Mono),
+                            style,
+                        ));
                     }
                 }
             }
@@ -519,9 +522,12 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render(&f.view(), area, &mut buf);
         let r1 = row_text(&buf, 1);
-        let x = r1
-            .chars()
-            .position(|c| c == '•')
+        // The fixture palette has colour, so the lost sample is the red floor `▁`; the reply
+        // before it is a green bar, so the first `▁` from the right is the drop.
+        let chars: Vec<char> = r1.chars().collect();
+        let x = chars
+            .iter()
+            .rposition(|&c| c == '▁')
             .unwrap_or_else(|| panic!("no lost mark in {r1:?}")) as u16;
         let cell = buf.cell((x, 1)).unwrap();
         assert_eq!(cell.fg, Color::Red, "{r1:?}");
