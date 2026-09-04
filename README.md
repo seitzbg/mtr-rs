@@ -23,6 +23,41 @@ Keys follow C mtr (`p`/space, `r`, `n`, `z`, `e`, `s`, `b`, `i`, `f`, `m`, `o`, 
 `↑`/`↓`/`j`/`k` to select a hop, `Enter` to toggle the detail pane, `Tab` to switch RTT / Addresses / Log,
 and `d` to toggle the Recent sparkline column.
 
+## Configuration
+
+Optional, and entirely a Rust-port addition: `~/.config/mtr-rs/config.toml`
+(`$XDG_CONFIG_HOME/mtr-rs/config.toml` when that variable is set, `--config PATH` to point
+elsewhere). Write a fully commented starter file with
+
+    mtr --init-config      # creates the file, prints its path, never overwrites one
+
+The file only supplies defaults. Precedence, lowest to highest:
+
+    built-in defaults  <  config file  <  $MTR_OPTIONS  <  the command line
+
+    [display]
+    rtt_thresholds_ms = [30, 100, 200, 500]  # RTT colour ramp: green|yellow|magenta|red|bold red
+    fields = "LS NABWV"                      # the field letters of -o
+    ascii = false                            # --ascii
+    color = "auto"                           # auto | always | never ("never" is --no-color)
+    sparkline = true                         # Recent column shown when the TUI starts
+    detail_pane = true                       # detail pane open when the TUI starts
+
+    [probe]
+    interval = 1.0                           # -i
+    max_ttl = 30                             # -m
+    max_unknown = 12                         # -U
+    timeout = 10                             # -Z
+    dns = true                               # false is -n
+    asn = false                              # true is -z
+
+Every key is optional, but the file is strict: an unknown key (or an unknown `color` value) is an
+error, so a typo is reported rather than silently ignored. An absent file is normal; an unreadable
+or malformed one is a fatal `mtr: config: <path>: <error>`. Under sudo `--config` is refused and
+the default path is not read, the same way `-F` is disabled. `docs/config.example.toml` is the
+same content `--init-config` writes. For a single run, `--rtt-thresholds 30,100,200,500` sets the
+colour ramp and `--color auto|always|never` overrides `display.color`.
+
 ## Development
 
     cargo test --workspace                           # unit, scenario and fake-helper tests

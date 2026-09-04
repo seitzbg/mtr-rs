@@ -28,3 +28,5 @@ ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3"
 insta = "1"
+serde = { version = "1", features = ["derive"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }

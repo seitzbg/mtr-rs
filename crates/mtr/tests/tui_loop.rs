@@ -65,6 +65,8 @@ async fn session(keys: Vec<(u64, std::io::Result<Event>)>, cfg: Config) -> Sessi
         let opts = TuiOptions {
             glyphs: Glyphs::select(false),
             palette: Palette::new(Depth::Mono),
+            sparkline: true,
+            detail_pane: true,
             is_root: true,
             local_hostname: "testhost",
             target_name: "192.0.2.1",

@@ -4,6 +4,7 @@
 
 pub mod asn;
 pub mod cli;
+pub mod config_file;
 pub mod driver;
 pub mod emit;
 pub mod helper;
@@ -84,8 +85,43 @@ pub async fn run(argv: Vec<String>) -> i32 {
         print!("{}", cli::version_text(args.version));
         return 0;
     }
+    let sudo_guard = helper::sudo_guard_present();
+    let cfg_path = match config_file::config_source(args.config.as_deref(), sudo_guard) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("mtr: {msg}");
+            return 1;
+        }
+    };
+    if args.init_config {
+        let Some(p) = &cfg_path else {
+            eprintln!("mtr: config: no path: set $HOME or $XDG_CONFIG_HOME, or pass --config");
+            return 1;
+        };
+        return match config_file::init(p) {
+            Ok(()) => {
+                println!("{}", p.display());
+                0
+            }
+            Err(msg) => {
+                eprintln!("mtr: config: {msg}");
+                1
+            }
+        };
+    }
+    // A `None` path means no `$HOME` and no absolute `$XDG_CONFIG_HOME`, i.e. there is no file to
+    // read — the same situation as a file that does not exist.
+    if let Some(p) = &cfg_path {
+        match config_file::load(p) {
+            Ok(cfg) => config_file::apply(&mut args, &cfg),
+            Err(msg) => {
+                eprintln!("mtr: config: {msg}");
+                return 1;
+            }
+        }
+    }
     if let Some(file) = args.filename.take() {
-        match options::hosts_from_file_option(&file, helper::sudo_guard_present()) {
+        match options::hosts_from_file_option(&file, sudo_guard) {
             Ok(mut names) => {
                 names.append(&mut args.hosts);
                 args.hosts = names;
@@ -214,7 +250,9 @@ async fn run_target(
                 .map_err(|e| Fatal::Abort(format!("terminal: {e}")))?;
             let tui_opts = tui::TuiOptions {
                 glyphs: tui::Glyphs::select(opts.ascii),
-                palette: tui::Palette::detect(opts.color),
+                sparkline: opts.sparkline,
+                detail_pane: opts.detail_pane,
+                palette: tui::Palette::detect(opts.color).with_rtt_thresholds(opts.rtt_thresholds),
                 is_root,
                 local_hostname: &local_hostname,
                 target_name: &t.name,

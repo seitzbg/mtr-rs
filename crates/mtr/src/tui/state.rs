@@ -145,12 +145,18 @@ impl Default for UiState {
 
 impl UiState {
     pub fn new() -> Self {
+        Self::with_view(true, true)
+    }
+
+    /// The initial Recent-column and detail-pane visibility, which `display.sparkline` and
+    /// `display.detail_pane` in the config file choose.
+    pub fn with_view(sparkline: bool, pane_open: bool) -> Self {
         UiState {
             selected: 0,
             scroll: 0,
-            pane_open: true,
+            pane_open,
             tab: DetailTab::Rtt,
-            sparkline: true,
+            sparkline,
             help: false,
             prompt: None,
             status: None,
