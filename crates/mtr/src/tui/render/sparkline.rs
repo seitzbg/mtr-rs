@@ -88,9 +88,12 @@ pub fn cells_for_hop(hop: &Hop, width: usize, scale: &Scale) -> Vec<Cell> {
     }
 }
 
-pub fn glyph(cell: &Cell, g: &Glyphs) -> &'static str {
+/// `mono` selects the colourless loss glyph: without colour the red floor `▁` would be the same
+/// character as the lowest RTT bucket.
+pub fn glyph(cell: &Cell, g: &Glyphs, mono: bool) -> &'static str {
     match cell {
         Cell::Rtt(b, _) => g.bars[(*b).min(BUCKETS - 1)],
+        Cell::Lost if mono => g.loss_mono,
         Cell::Lost => g.loss,
         Cell::Pending => g.pending,
     }
@@ -179,10 +182,15 @@ mod tests {
             vec![Cell::Lost, Cell::Rtt(7, 8000)],
             "only the newest `width` samples"
         );
-        assert_eq!(glyph(&Cell::Rtt(7, 8000), &UNICODE), "█");
-        assert_eq!(glyph(&Cell::Lost, &UNICODE), "•");
-        assert_eq!(glyph(&Cell::Lost, &ASCII), "x");
-        assert_eq!(glyph(&Cell::Pending, &ASCII), " ");
+        assert_eq!(glyph(&Cell::Rtt(7, 8000), &UNICODE, false), "█");
+        // With colour a lost sample is a red floor flush with the bars; without colour that
+        // would be the same character as the lowest bucket, so the mono glyph differs.
+        assert_eq!(glyph(&Cell::Lost, &UNICODE, false), "▁");
+        assert_eq!(glyph(&Cell::Lost, &UNICODE, true), "•");
+        assert_ne!(glyph(&Cell::Lost, &UNICODE, true), UNICODE.bars[0]);
+        assert_eq!(glyph(&Cell::Lost, &ASCII, false), "_");
+        assert_eq!(glyph(&Cell::Lost, &ASCII, true), "x");
+        assert_eq!(glyph(&Cell::Pending, &ASCII, false), " ");
     }
 
     #[test]

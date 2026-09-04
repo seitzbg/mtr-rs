@@ -5,7 +5,12 @@ use ratatui::symbols::{Marker, border};
 pub struct Glyphs {
     /// Sparkline buckets, lowest RTT first.
     pub bars: [&'static str; 8],
+    /// Sparkline cell for a lost sample when colour is available: a floor flush with the bars'
+    /// baseline, so a lossy hop reads as a continuous red line that replies stand out of.
     pub loss: &'static str,
+    /// The same cell without colour, where the floor would be indistinguishable from the lowest
+    /// RTT bucket.
+    pub loss_mono: &'static str,
     pub pending: &'static str,
     /// Selected-row marker in the table.
     pub selected: &'static str,
@@ -26,7 +31,8 @@ pub struct Glyphs {
 
 pub static UNICODE: Glyphs = Glyphs {
     bars: ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"],
-    loss: "•",
+    loss: "▁",
+    loss_mono: "•",
     pending: " ",
     selected: "▶",
     lost_mark: "•",
@@ -40,7 +46,8 @@ pub static UNICODE: Glyphs = Glyphs {
 
 pub static ASCII: Glyphs = Glyphs {
     bars: [".", ":", "-", "=", "+", "*", "#", "@"],
-    loss: "x",
+    loss: "_",
+    loss_mono: "x",
     pending: " ",
     selected: ">",
     lost_mark: "x",
@@ -74,9 +81,11 @@ mod tests {
     #[test]
     fn sets_have_eight_bars_and_ascii_is_pure_ascii() {
         assert_eq!(UNICODE.bars, ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]);
-        assert_eq!(UNICODE.loss, "•");
+        assert_eq!(UNICODE.loss, "▁");
+        assert_eq!(UNICODE.loss_mono, "•");
         for g in [
             ASCII.loss,
+            ASCII.loss_mono,
             ASCII.pending,
             ASCII.selected,
             ASCII.lost_mark,
