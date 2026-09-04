@@ -79,9 +79,11 @@ enum Fatal {
     Abort(String),
 }
 
+/// The `Option<String>` carries the rendered JSON document (`Some` in JSON mode only); the other
+/// modes print as they go, because their output is a stream whose order matters.
 enum TargetOutcome {
-    Done,
-    Interrupted,
+    Done(Option<String>),
+    Interrupted(Option<String>),
 }
 
 /// ui/mtr.c:1272-1273: the interactive display runs the first target and stops.
@@ -201,10 +203,13 @@ pub async fn run(argv: Vec<String>) -> i32 {
     }
 
     let mut exit_val = 0;
+    let mut json_docs: Vec<String> = Vec::new();
     for t in targets_to_run(opts.mode, &opts.targets) {
         match run_target(&opts, t, af, is_root).await {
-            Ok(TargetOutcome::Done) => {}
-            Ok(TargetOutcome::Interrupted) => {
+            Ok(TargetOutcome::Done(doc)) => json_docs.extend(doc),
+            Ok(TargetOutcome::Interrupted(doc)) => {
+                // C prints the current target's JSON on SIGINT too.
+                json_docs.extend(doc);
                 exit_val = 130;
                 break;
             }
@@ -224,6 +229,9 @@ pub async fn run(argv: Vec<String>) -> i32 {
                 return 1;
             }
         }
+    }
+    if !json_docs.is_empty() {
+        print!("{}", emit::json::wrap_documents(&json_docs));
     }
     exit_val
 }
@@ -331,9 +339,10 @@ async fn run_target(
         wide: opts.report_wide,
         fields: mtr_core::fields::active_fields(&engine.config().fields),
     };
+    let mut json_doc = None;
     match opts.mode {
         OutputMode::Report => print!("{}", emit::report::render(&ctx)),
-        OutputMode::Json => print!("{}", emit::json::render(&ctx)),
+        OutputMode::Json => json_doc = Some(emit::json::render(&ctx)),
         OutputMode::Csv => {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -344,9 +353,9 @@ async fn run_target(
         OutputMode::Tui => print!("{}", emit::report_on_exit_text(&ctx, opts.report_on_exit)),
     }
     Ok(if interrupted {
-        TargetOutcome::Interrupted
+        TargetOutcome::Interrupted(json_doc)
     } else {
-        TargetOutcome::Done
+        TargetOutcome::Done(json_doc)
     })
 }
 

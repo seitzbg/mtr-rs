@@ -364,3 +364,21 @@ fn report_mode_runs_every_target_and_keeps_going_after_a_failure() {
     assert_eq!(o.status.code(), Some(0), "{out}");
     assert_eq!(out.matches("Start: ").count(), 2, "{out}");
 }
+
+#[test]
+fn json_with_two_targets_is_a_single_array() {
+    let mut c = mtr();
+    c.env(
+        "MTR_PACKET",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-mtr-packet.py"),
+    );
+    let o = c
+        .args(["-j", "-n", "-c", "1", "-G", "0.2", "192.0.2.1", "192.0.2.2"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert_eq!(o.status.code(), Some(0), "{out}");
+    assert!(out.starts_with("[\n"), "{out}");
+    assert!(out.trim_end().ends_with(']'), "{out}");
+    assert_eq!(out.matches("\"report\"").count(), 2, "{out}");
+}

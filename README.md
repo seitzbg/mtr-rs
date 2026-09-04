@@ -62,7 +62,7 @@ Binaries only, without man pages or completions:
     target/release/mtr --report-on-exit example.org   # print the -r report when the TUI closes
     target/release/mtr -r -c 5 example.org            # classic report
     target/release/mtr -rwz -c 5 example.org          # wide report with AS numbers
-    target/release/mtr -j example.org | jq .          # JSON, same schema as C mtr
+    target/release/mtr -j example.org | jq .          # JSON, same schema as C mtr (an array when several targets are given)
     MTR_RS_LOG=/tmp/mtr.log target/release/mtr 1.1.1.1  # debug log (new file only; ignored under sudo)
 
 Keys follow C mtr (`p`/space, `r`, `n`, `z`, `e`, `s`, `b`, `i`, `f`, `m`, `o`, `Q`, `u`/`t`, `?`) plus

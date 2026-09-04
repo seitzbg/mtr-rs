@@ -8,6 +8,7 @@ All notable changes to mtr-rs are documented here. The format follows
 
 ### Added
 ### Changed
+- `-j` with several targets prints one JSON array instead of concatenated objects (deviation 30, CR-04).
 ### Fixed
 - `-i`, `-G`, the config file and the TUI interval prompt reject `nan`, `inf` and absurdly large values instead of freezing the schedule (CR-02).
 - Several targets in interactive mode: only the first runs and a resolution failure is fatal, as in C; the same-family check applies to the report modes only (CR-05).
