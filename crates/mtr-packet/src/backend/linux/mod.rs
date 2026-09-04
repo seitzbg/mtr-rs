@@ -238,8 +238,11 @@ impl ProbeBackend for LinuxBackend {
     fn protocol_supported(&self, protocol: Protocol) -> bool {
         protocol != Protocol::Sctp || self.sctp
     }
+    /// Deviation 34: `mark` is answered honestly. C says `ok` whenever `SO_MARK` compiles and
+    /// then fails in `setsockopt()` after the privilege drop; we report what the kernel will
+    /// actually accept, which is `CAP_NET_ADMIN` surviving `privs::drop_all()`.
     fn mark_supported(&self) -> bool {
-        true
+        crate::privs::has_net_admin()
     }
     /// `send_probe()` (probe_unix.c:559-640). `timeout_at` stays as `alloc()` stamped it; C
     /// re-stamps departure just before constructing the packet (probe_unix.c:581) and we do the

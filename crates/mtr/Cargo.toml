@@ -42,7 +42,7 @@ insta.workspace = true
 # Source paths other than target/release/* resolve relative to this Cargo.toml (hence ../../).
 [package.metadata.deb]
 name = "mtr-rs"
-maintainer = "Bryan Seitz <bseitz@nvidia.com>"
+maintainer = "Bryan Seitz <171158+seitzbg@users.noreply.github.com>"
 copyright = "mtr-rs contributors; a Rust port of mtr (GPL-2.0-only)"
 license-file = ["../../LICENSE", "0"]
 extended-description = """\

@@ -140,3 +140,39 @@ pub fn render(ctx: &ReportContext<'_>) -> String {
     o.push_str("    }\n}\n");
     o
 }
+
+/// Deviation 30: C prints one `{"report": …}` object per target back to back, which is not a
+/// valid JSON document. With more than one target we wrap them in an array (jansson layout:
+/// 4-space indent); a single target is byte-identical to C.
+pub fn wrap_documents(docs: &[String]) -> String {
+    if docs.len() < 2 {
+        return docs.first().cloned().unwrap_or_default();
+    }
+    let indented: Vec<String> = docs
+        .iter()
+        .map(|d| {
+            d.trim_end_matches('\n')
+                .lines()
+                .map(|l| format!("    {l}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect();
+    format!("[\n{}\n]\n", indented.join(",\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap_documents;
+
+    #[test]
+    fn several_documents_become_one_array() {
+        let a = "{\n    \"x\": 1\n}\n".to_string();
+        let b = "{\n    \"x\": 2\n}\n".to_string();
+        assert_eq!(wrap_documents(std::slice::from_ref(&a)), a);
+        assert_eq!(
+            wrap_documents(&[a, b]),
+            "[\n    {\n        \"x\": 1\n    },\n    {\n        \"x\": 2\n    }\n]\n"
+        );
+    }
+}

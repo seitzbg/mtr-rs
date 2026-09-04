@@ -27,11 +27,25 @@ use crate::names::NameCache;
 use crate::resolver::{Resolver, ResolverConfig};
 
 /// `MTR_RS_LOG=<file>` enables tracing output (level via `MTR_RS_LOG_LEVEL`, default `debug`).
-fn init_logging() {
+/// Ignored under the sudo guard: the path comes from the environment of a possibly privileged
+/// invocation, the same rule as `$MTR_PACKET`, `-F` and `--config`.
+pub fn init_logging(sudo_guard: bool) {
     let Some(path) = std::env::var_os("MTR_RS_LOG") else {
         return;
     };
-    let Ok(file) = std::fs::File::create(&path) else {
+    init_logging_to(sudo_guard, std::path::Path::new(&path));
+}
+
+fn init_logging_to(sudo_guard: bool, path: &std::path::Path) {
+    if sudo_guard {
+        return;
+    }
+    // create_new: never truncate or follow an existing file into somewhere we did not intend.
+    let Ok(file) = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    else {
         return;
     };
     let filter = tracing_subscriber::EnvFilter::try_from_env("MTR_RS_LOG_LEVEL")
@@ -45,7 +59,6 @@ fn init_logging() {
 
 /// Entry point used by the binary: environment + argv → exit code.
 pub async fn run_from_env() -> i32 {
-    init_logging();
     let env_options = std::env::var("MTR_OPTIONS").ok();
     match cli::build_argv(env_options.as_deref(), std::env::args().skip(1)) {
         Ok(argv) => run(argv).await,
@@ -66,9 +79,28 @@ enum Fatal {
     Abort(String),
 }
 
+/// The `Option<String>` carries the rendered JSON document (`Some` in JSON mode only); the other
+/// modes print as they go, because their output is a stream whose order matters.
 enum TargetOutcome {
-    Done,
-    Interrupted,
+    Done(Option<String>),
+    Interrupted(Option<String>),
+}
+
+/// ui/mtr.c:1275-1276: the interactive display runs the first target and stops.
+fn targets_to_run(mode: OutputMode, targets: &[Target]) -> &[Target] {
+    if mode == OutputMode::Tui {
+        &targets[..targets.len().min(1)]
+    } else {
+        targets
+    }
+}
+
+/// ui/mtr.c:1238-1250: any per-target failure — name resolution, source-address validation,
+/// interface lookup, route discovery (`net_open()`) or starting the probe helper — ends an
+/// interactive run, while the report modes print the message, skip the target and carry on with
+/// exit status 1.
+fn target_failure_is_fatal(mode: OutputMode) -> bool {
+    mode == OutputMode::Tui
 }
 
 /// Parse, validate and run every target; returns the process exit code.
@@ -86,6 +118,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
         return 0;
     }
     let sudo_guard = helper::sudo_guard_present();
+    init_logging(sudo_guard);
     if args.init_config {
         let p = match config_file::init_config_target(args.config.as_deref(), sudo_guard) {
             Ok(p) => p,
@@ -148,7 +181,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
     // getaddrinfo() hint for every later target, so a dual-stack host follows the first one and
     // only a host with no address in that family fails (C: EAI_ADDRFAMILY).
     let mut af = opts.af;
-    if opts.targets.len() > 1 {
+    if opts.mode != OutputMode::Tui && opts.targets.len() > 1 {
         let requested = opts.af;
         for t in &opts.targets {
             match target::resolve_target(&t.name, af).await {
@@ -172,26 +205,48 @@ pub async fn run(argv: Vec<String>) -> i32 {
     }
 
     let mut exit_val = 0;
-    for t in &opts.targets {
+    let mut json_docs: Vec<String> = Vec::new();
+    for t in targets_to_run(opts.mode, &opts.targets) {
         match run_target(&opts, t, af, is_root).await {
-            Ok(TargetOutcome::Done) => {}
-            Ok(TargetOutcome::Interrupted) => {
+            Ok(TargetOutcome::Done(doc)) => json_docs.extend(doc),
+            Ok(TargetOutcome::Interrupted(doc)) => {
+                // C prints the current target's JSON on SIGINT too.
+                json_docs.extend(doc);
                 exit_val = 130;
                 break;
             }
             Err(Fatal::Skip(msg)) => {
                 eprintln!("mtr: {msg}");
+                if target_failure_is_fatal(opts.mode) {
+                    return 1;
+                }
                 exit_val = 1;
             }
+            // ui/mtr.c:1238-1250 makes no distinction between the failure kinds: whatever
+            // stops one target is fatal in the interactive display and a skip in the report
+            // modes. `Fatal::Abort` covers source-address validation, interface lookup, route
+            // discovery and the helper handshake; a helper that will not start simply fails
+            // again for the next target, which costs one more message and no output. It also
+            // covers mid-run failures (terminal or helper pipe errors) that C ends with
+            // `error(EXIT_FAILURE)`; skipping to the next target there is a small, harmless
+            // difference — nothing partial has been printed and the exit status is still 1.
             Err(Fatal::Abort(msg)) => {
                 eprintln!("mtr: {msg}");
                 if msg == helper::fatal_message(&mtr_proto::ResponseKind::PermissionDenied).unwrap()
                 {
                     eprintln!("mtr: hint: sudo setcap cap_net_raw+ep \"$(command -v mtr-packet)\"");
                 }
-                return 1;
+                if target_failure_is_fatal(opts.mode) {
+                    return 1;
+                }
+                // Fall through to the trailing `wrap_documents` print: the documents already
+                // rendered for earlier targets reached stdout before this branch existed.
+                exit_val = 1;
             }
         }
+    }
+    if !json_docs.is_empty() {
+        print!("{}", emit::json::wrap_documents(&json_docs));
     }
     exit_val
 }
@@ -299,9 +354,10 @@ async fn run_target(
         wide: opts.report_wide,
         fields: mtr_core::fields::active_fields(&engine.config().fields),
     };
+    let mut json_doc = None;
     match opts.mode {
         OutputMode::Report => print!("{}", emit::report::render(&ctx)),
-        OutputMode::Json => print!("{}", emit::json::render(&ctx)),
+        OutputMode::Json => json_doc = Some(emit::json::render(&ctx)),
         OutputMode::Csv => {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -312,8 +368,51 @@ async fn run_target(
         OutputMode::Tui => print!("{}", emit::report_on_exit_text(&ctx, opts.report_on_exit)),
     }
     Ok(if interrupted {
-        TargetOutcome::Interrupted
+        TargetOutcome::Interrupted(json_doc)
     } else {
-        TargetOutcome::Done
+        TargetOutcome::Done(json_doc)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    fn temp(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("mtr-rs-log-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("mtr.log")
+    }
+
+    #[test]
+    fn logging_is_disabled_under_the_sudo_guard() {
+        let path = temp("guard");
+        super::init_logging_to(true, &path);
+        assert!(
+            !path.exists(),
+            "log file must not be created under the sudo guard"
+        );
+    }
+
+    #[test]
+    fn interactive_mode_runs_only_the_first_target() {
+        use crate::cli::{OutputMode, Target};
+        let t = |n: &str| Target {
+            name: n.to_string(),
+            port: 0,
+        };
+        let all = vec![t("a"), t("b")];
+        assert_eq!(super::targets_to_run(OutputMode::Tui, &all).len(), 1);
+        assert_eq!(super::targets_to_run(OutputMode::Report, &all).len(), 2);
+        assert_eq!(super::targets_to_run(OutputMode::Json, &all).len(), 2);
+        assert!(super::target_failure_is_fatal(OutputMode::Tui));
+        assert!(!super::target_failure_is_fatal(OutputMode::Csv));
+    }
+
+    #[test]
+    fn logging_never_truncates_an_existing_file() {
+        let path = temp("existing");
+        std::fs::write(&path, "keep me\n").unwrap();
+        super::init_logging_to(false, &path);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep me\n");
+    }
 }

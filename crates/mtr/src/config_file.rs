@@ -44,6 +44,8 @@ pub const TEMPLATE: &str = r##"# mtr-rs configuration file — ~/.config/mtr-rs/
 [probe]
 # Seconds between probe cycles (-i). Values below 1.0 need root.
 #interval = 1.0
+# Seconds to wait for late replies after the last cycle (-G).
+#gracetime = 5.0
 # The highest TTL probed (-m).
 #max_ttl = 30
 # Consecutive unanswered hops before the scan stops (-U).
@@ -84,6 +86,7 @@ pub struct DisplaySection {
 #[serde(deny_unknown_fields)]
 pub struct ProbeSection {
     pub interval: Option<f64>,
+    pub gracetime: Option<f64>,
     pub max_ttl: Option<i64>,
     pub max_unknown: Option<i64>,
     pub timeout: Option<i64>,
@@ -117,10 +120,11 @@ impl FileConfig {
         if let Some(f) = &self.display.fields {
             mtr_core::fields::validate_fields(f)?;
         }
-        if let Some(i) = self.probe.interval
-            && i <= 0.0
-        {
-            return Err("wait time must be positive".to_string());
+        if let Some(i) = self.probe.interval {
+            crate::cli::validate_seconds("wait time", i)?;
+        }
+        if let Some(g) = self.probe.gracetime {
+            crate::cli::validate_seconds("grace time", g)?;
         }
         if let Some(t) = self.probe.timeout
             && t < 1
@@ -148,10 +152,10 @@ fn parse_rtt_thresholds_ms(v: Option<&[i64]>) -> Result<Option<RttThresholds>, S
     let Some(v) = v else {
         return Ok(None);
     };
-    if v.iter().any(|&n| n < 0) {
-        return Err("rtt thresholds must be positive".to_string());
-    }
-    let ms: Vec<u64> = v.iter().map(|&n| n as u64).collect();
+    let ms: Vec<u64> = v
+        .iter()
+        .map(|&n| crate::cli::rtt_threshold_ms(n))
+        .collect::<Result<_, _>>()?;
     RttThresholds::from_millis(&ms).map(Some)
 }
 
@@ -302,6 +306,11 @@ pub fn apply(args: &mut Args, cfg: &LoadedConfig) {
     {
         args.interval = i;
     }
+    if unset("gracetime")
+        && let Some(g) = file.probe.gracetime
+    {
+        args.gracetime = g;
+    }
     if unset("max_ttl")
         && let Some(m) = file.probe.max_ttl
     {
@@ -336,6 +345,16 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::cli::{Options, build_argv};
+
+    #[test]
+    fn validate_rejects_non_finite_interval_and_gracetime() {
+        let mut f = FileConfig::default();
+        f.probe.interval = Some(f64::INFINITY);
+        assert_eq!(f.validate().unwrap_err(), "wait time must be positive");
+        let mut f = FileConfig::default();
+        f.probe.gracetime = Some(f64::NAN);
+        assert_eq!(f.validate().unwrap_err(), "grace time must be positive");
+    }
 
     /// A `config.toml` in a private temp directory, removed again when `f` returns.
     fn with_file<R>(text: &str, f: impl FnOnce(&Path) -> R) -> R {
@@ -395,6 +414,7 @@ sparkline = false
 detail_pane = false
 [probe]
 interval = 2.5
+gracetime = 2.0
 max_ttl = 20
 max_unknown = 3
 timeout = 7
@@ -408,6 +428,7 @@ asn = true
         assert_eq!(o.config.fields, "LSNB");
         assert!(o.ascii && !o.color && !o.sparkline && !o.detail_pane);
         assert_eq!(o.config.interval, 2.5);
+        assert_eq!(o.config.grace_time, 2.0);
         assert_eq!(o.config.max_ttl, 20);
         assert_eq!(o.config.max_unknown, 3);
         assert_eq!(o.config.probe_timeout, std::time::Duration::from_secs(7));
@@ -540,6 +561,7 @@ sparkline = false
 detail_pane = false
 [probe]
 interval = 2.5
+gracetime = 2.0
 max_ttl = 20
 max_unknown = 3
 timeout = 7
@@ -557,6 +579,7 @@ asn = true
         assert_eq!(d.sparkline, Some(false));
         assert_eq!(d.detail_pane, Some(false));
         assert_eq!(pr.interval, Some(2.5));
+        assert_eq!(pr.gracetime, Some(2.0));
         assert_eq!(pr.max_ttl, Some(20));
         assert_eq!(pr.max_unknown, Some(3));
         assert_eq!(pr.timeout, Some(7));

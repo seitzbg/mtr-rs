@@ -25,6 +25,8 @@
 [probe]
 # Seconds between probe cycles (-i). Values below 1.0 need root.
 #interval = 1.0
+# Seconds to wait for late replies after the last cycle (-G).
+#gracetime = 5.0
 # The highest TTL probed (-m).
 #max_ttl = 30
 # Consecutive unanswered hops before the scan stops (-U).

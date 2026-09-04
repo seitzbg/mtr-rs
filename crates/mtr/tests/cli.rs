@@ -348,3 +348,98 @@ fn color_never_in_the_file_can_be_overridden_from_the_command_line() {
     assert!(err.contains("invalid value 'sometimes'"), "{err}");
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
+
+#[test]
+fn report_mode_runs_every_target_and_keeps_going_after_a_failure() {
+    let mut c = mtr();
+    c.env(
+        "MTR_PACKET",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-mtr-packet.py"),
+    );
+    let o = c
+        .args(["-r", "-n", "-c", "1", "-G", "0.2", "192.0.2.1", "192.0.2.2"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert_eq!(o.status.code(), Some(0), "{out}");
+    assert_eq!(out.matches("Start: ").count(), 2, "{out}");
+}
+
+#[test]
+fn json_with_two_targets_is_a_single_array() {
+    let mut c = mtr();
+    c.env(
+        "MTR_PACKET",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-mtr-packet.py"),
+    );
+    let o = c
+        .args(["-j", "-n", "-c", "1", "-G", "0.2", "192.0.2.1", "192.0.2.2"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert_eq!(o.status.code(), Some(0), "{out}");
+    assert!(out.starts_with("[\n"), "{out}");
+    assert!(out.trim_end().ends_with(']'), "{out}");
+    assert_eq!(out.matches("\"report\"").count(), 2, "{out}");
+}
+
+/// Rough validity check for a JSON document: every brace and bracket is balanced once string
+/// literals (and their escapes) are accounted for. Enough to prove the accumulated output was
+/// not truncated, without pulling a JSON parser into the dev-dependencies.
+fn json_is_well_formed(s: &str) -> bool {
+    let mut stack = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for c in s.chars() {
+        if in_string {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '{' => stack.push('}'),
+            '[' => stack.push(']'),
+            '}' | ']' if stack.pop() != Some(c) => return false,
+            _ => {}
+        }
+    }
+    !in_string && stack.is_empty()
+}
+
+/// A `Fatal::Abort` on a later target must not retract the JSON already rendered for the
+/// earlier ones: before the accumulator existed each target printed as it finished, and
+/// ui/mtr.c:1238-1250 skips the failed target in the report modes anyway.
+#[test]
+fn json_keeps_finished_targets_when_a_later_one_aborts() {
+    let counter = std::env::temp_dir().join(format!("mtr-rs-cli-spawn-{}", std::process::id()));
+    let _ = std::fs::remove_file(&counter);
+    let mut c = mtr();
+    c.env(
+        "MTR_PACKET",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fail-second-spawn.py"),
+    )
+    // The wrapper spawns successfully and then exits, so the client fails the startup
+    // handshake instead of falling through to the next candidate path (which only happens
+    // when `spawn()` itself fails).
+    .env("MTR_FAKE_COUNTER", &counter);
+    let o = c
+        .args(["-j", "-n", "-c", "1", "-G", "0.2", "192.0.2.1", "192.0.2.2"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&counter);
+    let out = String::from_utf8_lossy(&o.stdout);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(1), "{out}{err}");
+    assert!(json_is_well_formed(&out), "{out}");
+    // One document, so it is a bare object rather than a one-element array.
+    assert!(out.starts_with('{'), "{out}");
+    assert_eq!(out.matches("\"report\"").count(), 1, "{out}");
+    assert!(out.contains("192.0.2.1"), "{out}");
+    assert!(!out.contains("192.0.2.2"), "{out}");
+    assert!(err.contains("startup check"), "{err}");
+}

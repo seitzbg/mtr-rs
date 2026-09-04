@@ -36,19 +36,23 @@ impl AsnInfo {
 }
 
 /// Whether `query_name` will address `ip` via the IPv4 zone: true for a real IPv4 address, or a
-/// `64:ff9b::/96` (NAT64) address that folds to its embedded IPv4 address (asn.c:329-332, 409-419).
+/// `64:ff9b::/96` (NAT64) address that folds to its embedded IPv4 address (asn.c:329-332,
+/// 409-419).
+///
+/// Deviation 33: C's `is_well_known_nat64` compares only the first 32 bits (asn.c:329-332), so it
+/// folds every `64:ff9b::/32` address — including `64:ff9b:1::/48`, the local-use prefix of
+/// RFC 8215, whose last 32 bits are not an embedded IPv4 address. RFC 6052 defines the well-known
+/// prefix as `64:ff9b::/96`; only that is folded here.
 pub fn uses_ipv4_zone(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(_) => true,
-        IpAddr::V6(v6) => {
-            let b = v6.octets();
-            b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b
-        }
+        IpAddr::V6(v6) => v6.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0],
     }
 }
 
 /// asn.c:394-439: reversed dotted quad, or the top 64 bits nibble-reversed, plus the zone;
-/// `64:ff9b::/32` (NAT64) folds to the embedded IPv4 address (asn.c:329-332, 409-419).
+/// `64:ff9b::/96` (NAT64) folds to the embedded IPv4 address (asn.c:329-332, 409-419; deviation
+/// 33 — C compares only the first 32 bits).
 pub fn query_name(ip: IpAddr, provider4: &str, provider6: &str) -> String {
     if uses_ipv4_zone(ip) {
         let o = match ip {
@@ -160,6 +164,16 @@ mod tests {
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn only_the_well_known_slash_96_prefix_is_nat64() {
+        assert!(uses_ipv4_zone(ip("64:ff9b::c000:201")));
+        assert!(!uses_ipv4_zone(ip("64:ff9b:1::c000:201")));
+        assert!(!uses_ipv4_zone(ip("64:ff9b::1:c000:201")));
+        // query_name for a /32-but-not-/96 address goes to the IPv6 zone (nibble format)
+        let q = query_name(ip("64:ff9b:1::c000:201"), P4, P6);
+        assert!(q.ends_with(P6), "{q}");
     }
 
     #[test]

@@ -12,7 +12,11 @@ is the privileged half of
 It is started by the unprivileged client, reads one command per line on
 standard input and writes one reply per line on standard output. It opens
 its raw sockets first, drops every privilege (setgid, setuid, and all
-capability sets), and only then starts serving. It exits when standard input
+capability sets bar a granted
+.BR CAP_NET_ADMIN ,
+see
+.BR PRIVILEGES ),
+and only then starts serving. It exits when standard input
 is closed and no probe is outstanding.
 .PP
 The line protocol is that of mtr 0.96: a request is
@@ -63,6 +67,40 @@ falls back to unprivileged ICMP and UDP datagram sockets with
 echo replies and time-exceeded errors are still reported, but MPLS labels
 are not available on that path and TCP/SCTP probes cannot see intermediate
 hops.
+.PP
+The privilege drop keeps
+.BR CAP_NET_ADMIN ,
+and only that, when it was actually granted, because
+.B SO_MARK
+is set per probe after the drop:
+.BR mtr (8)'s
+.B \-M
+.RB ( \-\-mark )
+therefore needs
+.B cap_net_admin
+on
+.B mtr-packet
+and root (or
+.BR cap_net_admin )
+for the client's own route lookup. Grant both with
+.BR "setcap cap_net_raw,cap_net_admin+ep /usr/bin/mtr-packet" .
+.B "check\-support feature mark"
+answers
+.B ok
+only when the capability is really held.
+.PP
+.B CAP_NET_ADMIN
+is one of the broadest Linux capabilities \(em interface and routing
+configuration, netfilter, promiscuous mode, netlink administration \(em so it
+grants far more than
+.BR SO_MARK ,
+and because the drop happens before the first command is read, a helper that
+started with it keeps it for the whole run, on every run and not only when
+.B \-M
+is used; the same holds under
+.BR "sudo mtr" .
+Grant it only if you use
+.BR \-M .
 .SH FILES
 .TP
 .I /etc/mtr.is.run.under.sudo

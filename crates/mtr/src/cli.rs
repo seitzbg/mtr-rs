@@ -71,6 +71,22 @@ pub fn packet_size_in_range(n: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// Upper bound for user-supplied seconds: one year. Anything larger is a typo or an attack on the
+/// f64 → Duration conversions downstream.
+pub const MAX_SECONDS: f64 = 86_400.0 * 365.0;
+
+/// Shared check for every "seconds" value (`-i`, `-G`, the config file, the TUI prompt):
+/// finite, positive and bounded.
+pub fn validate_seconds(what: &str, v: f64) -> Result<(), String> {
+    if !v.is_finite() || v <= 0.0 {
+        return Err(format!("{what} must be positive"));
+    }
+    if v > MAX_SECONDS {
+        return Err(format!("{what} is too large"));
+    }
+    Ok(())
+}
+
 fn parse_port(s: &str) -> Result<u16, String> {
     let n = parse_c_long(s)?;
     if !(1..=65535).contains(&n) {
@@ -112,16 +128,27 @@ pub fn split_target_port(name: &str) -> Result<Target, String> {
     })
 }
 
+/// Upper bound for one RTT colour threshold: a day in milliseconds. Anything larger is a typo,
+/// and the value has to survive the conversion to microseconds downstream.
+pub const MAX_RTT_THRESHOLD_MS: u64 = 86_400_000;
+
+/// One `--rtt-thresholds` / `rtt_thresholds_ms` entry, checked instead of cast.
+pub fn rtt_threshold_ms(n: i64) -> Result<u64, String> {
+    u64::try_from(n)
+        .ok()
+        .filter(|&ms| ms <= MAX_RTT_THRESHOLD_MS)
+        .ok_or_else(|| {
+            format!("rtt-thresholds values must be between 0 and {MAX_RTT_THRESHOLD_MS} ms")
+        })
+}
+
 /// `--rtt-thresholds 30,100,200,500`: the four millisecond bounds of the RTT colour ramp.
 pub fn parse_rtt_thresholds(spec: &str) -> Result<RttThresholds, String> {
     let mut ms = Vec::new();
     for item in spec.split(',') {
         let n = parse_c_long(item.trim())
             .map_err(|_| format!("invalid rtt threshold '{}' in '{spec}'", item.trim()))?;
-        if n < 0 {
-            return Err("rtt thresholds must be positive".to_string());
-        }
-        ms.push(n as u64);
+        ms.push(rtt_threshold_ms(n)?);
     }
     RttThresholds::from_millis(&ms)
 }
@@ -221,11 +248,12 @@ pub struct Args {
         short = 'i',
         long = "interval",
         value_name = "SECONDS",
-        default_value_t = 1.0
+        default_value_t = 1.0,
+        allow_negative_numbers = true
     )]
     pub interval: f64,
     /// Number of probe cycles
-    #[arg(short = 'c', long = "report-cycles", value_name = "COUNT", value_parser = parse_c_long)]
+    #[arg(short = 'c', long = "report-cycles", value_name = "COUNT", value_parser = parse_c_long, allow_negative_numbers = true)]
     pub report_cycles: Option<i64>,
     /// Packet size (negative: random up to the absolute value)
     #[arg(
@@ -267,19 +295,19 @@ pub struct Args {
     #[arg(short = 'a', long = "address", value_name = "ADDRESS")]
     pub address: Option<String>,
     /// First TTL to probe
-    #[arg(short = 'f', long = "first-ttl", value_name = "NUM", value_parser = parse_c_long, default_value = "1")]
+    #[arg(short = 'f', long = "first-ttl", value_name = "NUM", value_parser = parse_c_long, default_value = "1", allow_negative_numbers = true)]
     pub first_ttl: i64,
     /// Maximum number of hops
-    #[arg(short = 'm', long = "max-ttl", value_name = "NUM", value_parser = parse_c_long, default_value = "30")]
+    #[arg(short = 'm', long = "max-ttl", value_name = "NUM", value_parser = parse_c_long, default_value = "30", allow_negative_numbers = true)]
     pub max_ttl: i64,
     /// TTL that must be reached before a cycle ends
-    #[arg(short = 'D', long = "due-ttl", value_name = "NUM", value_parser = parse_c_long)]
+    #[arg(short = 'D', long = "due-ttl", value_name = "NUM", value_parser = parse_c_long, allow_negative_numbers = true)]
     pub due_ttl: Option<i64>,
     /// Maximum unknown hops
-    #[arg(short = 'U', long = "max-unknown", value_name = "NUM", value_parser = parse_c_long, default_value = "12")]
+    #[arg(short = 'U', long = "max-unknown", value_name = "NUM", value_parser = parse_c_long, default_value = "12", allow_negative_numbers = true)]
     pub max_unknown: i64,
     /// Maximum ECMP paths shown per hop
-    #[arg(short = 'E', long = "max-display-path", value_name = "NUM", value_parser = parse_c_long, default_value = "8")]
+    #[arg(short = 'E', long = "max-display-path", value_name = "NUM", value_parser = parse_c_long, default_value = "8", allow_negative_numbers = true)]
     pub max_display_path: i64,
     /// Use UDP instead of ICMP echo
     #[arg(short = 'u', long = "udp")]
@@ -291,27 +319,28 @@ pub struct Args {
     #[arg(short = 'S', long = "sctp")]
     pub sctp: bool,
     /// Target port for TCP, SCTP or UDP
-    #[arg(short = 'P', long = "port", value_name = "PORT", value_parser = parse_c_long)]
+    #[arg(short = 'P', long = "port", value_name = "PORT", value_parser = parse_c_long, allow_negative_numbers = true)]
     pub port: Option<i64>,
     /// Source port for UDP
-    #[arg(short = 'L', long = "localport", value_name = "PORT", value_parser = parse_c_long)]
+    #[arg(short = 'L', long = "localport", value_name = "PORT", value_parser = parse_c_long, allow_negative_numbers = true)]
     pub localport: Option<i64>,
     /// Seconds to keep probe sockets open
-    #[arg(short = 'Z', long = "timeout", value_name = "SECONDS", value_parser = parse_c_long, default_value = "10")]
+    #[arg(short = 'Z', long = "timeout", value_name = "SECONDS", value_parser = parse_c_long, default_value = "10", allow_negative_numbers = true)]
     pub timeout: i64,
     /// Seconds to wait for late replies after the last cycle
     #[arg(
         short = 'G',
         long = "gracetime",
         value_name = "SECONDS",
-        default_value_t = 5.0
+        default_value_t = 5.0,
+        allow_negative_numbers = true
     )]
     pub gracetime: f64,
     /// Skip hops that answered within SECONDS
-    #[arg(long = "cache", value_name = "SECONDS", value_parser = parse_c_long)]
+    #[arg(long = "cache", value_name = "SECONDS", value_parser = parse_c_long, allow_negative_numbers = true)]
     pub cache: Option<i64>,
     /// Mark each sent packet (SO_MARK)
-    #[arg(short = 'M', long = "mark", value_name = "MARK", value_parser = parse_c_long)]
+    #[arg(short = 'M', long = "mark", value_name = "MARK", value_parser = parse_c_long, allow_negative_numbers = true)]
     pub mark: Option<i64>,
     /// Use ASCII glyphs and borders in the TUI
     #[arg(long = "ascii")]
@@ -447,21 +476,27 @@ impl Args {
         if !(0..=255).contains(&self.tos) {
             return Err(format!("value out of range (0 - 255): {}", self.tos));
         }
-        if self.interval <= 0.0 {
-            return Err("wait time must be positive".to_string());
-        }
+        validate_seconds("wait time", self.interval)?;
         if !is_root && self.interval < 1.0 {
             return Err("non-root users cannot request an interval < 1.0 seconds".to_string());
         }
-        if self.gracetime <= 0.0 {
-            return Err("grace time must be positive".to_string());
-        }
-        if self.cache.is_some_and(|c| c <= 0) {
-            return Err("cache timeout must be positive".to_string());
-        }
-        if self.timeout < 1 {
-            return Err("timeout must be positive".to_string());
-        }
+        validate_seconds("grace time", self.gracetime)?;
+        // mtr.c:783-788 errors on <= 0 with this text; the upper bound is ours (C stores an int).
+        let cache_timeout = match self.cache {
+            None => None,
+            Some(c) if c <= 0 => return Err("cache timeout must be positive".to_string()),
+            Some(c) => Some(
+                u64::try_from(c)
+                    .ok()
+                    .filter(|&c| c <= i32::MAX as u64)
+                    .ok_or("cache timeout must be between 1 and 2147483647".to_string())?,
+            ),
+        };
+        // C (mtr.c:846-849) stores -Z in an int and multiplies by 1e6 without any check.
+        let probe_timeout = match self.timeout {
+            t if (1..=i64::from(i32::MAX)).contains(&t) => t as u64,
+            _ => return Err("timeout must be between 1 and 2147483647".to_string()),
+        };
         let first_ttl = self.first_ttl.max(1);
         let max_ttl = self.max_ttl.clamp(1, 255);
         let due_ttl = match self.due_ttl {
@@ -484,7 +519,12 @@ impl Args {
                 "dueTTL({due_ttl}) cannot be larger than maxTTL({max_ttl})."
             ));
         }
-        let max_unknown = self.max_unknown.max(1);
+        // Deviation 35: C (mtr.c:742-747) silently clamps maxUnknown < 1 to 1 and has no upper
+        // bound; rejecting is clearer and keeps the value inside the u32 the engine holds.
+        let max_unknown = match self.max_unknown {
+            u if (1..=i64::from(i32::MAX)).contains(&u) => u as u32,
+            _ => return Err("max unknown must be between 1 and 2147483647".to_string()),
+        };
         let max_display_path = self.max_display_path.clamp(0, 128);
         let mut remote_port = match self.port {
             None => 0,
@@ -536,24 +576,43 @@ impl Args {
                 port: 0,
             });
         }
+        // C (mtr.c:876-878) parses -M with strtoulong_or_err into a uint32_t: a value above
+        // 2^32-1 wraps silently. Reject it instead.
+        let mark = match self.mark {
+            None => 0,
+            Some(m) => u32::try_from(m).map_err(|_| "mark must be between 0 and 4294967295")?,
+        };
+        // Deviation 35: C (mtr.c:678-681) parses -c into an int MaxPing with no range check and
+        // accepts a negative count; we reject anything outside 0..=INT_MAX. 0 keeps C's
+        // "run forever in interactive mode" meaning.
+        let max_ping = match self.report_cycles {
+            None => 10,
+            Some(c) if (0..=i64::from(i32::MAX)).contains(&c) => c as u32,
+            Some(_) => return Err("report cycles must be between 0 and 2147483647".to_string()),
+        };
         let config = Config {
             protocol,
             interval: self.interval,
-            max_ping: self.report_cycles.map(|c| c.max(0) as u32).unwrap_or(10),
+            max_ping,
             interactive: mode == OutputMode::Tui,
             force_max_ping: self.report_cycles.is_some(),
+            // packet_size_in_range() above bounds |psize| by MAX_PACKET.
             packet_size: self.psize as i32,
+            // The -1..=255 check above.
             bit_pattern: self.bitpattern as i32,
+            // The 0..=255 check above.
             tos: self.tos as u8,
-            mark: self.mark.map(|m| m as u32).unwrap_or(0),
+            mark,
+            // first_ttl/max_ttl/due_ttl are clamped to 1..=255 (0..=255 for due_ttl) above.
             first_ttl: first_ttl as u8,
             max_ttl: max_ttl as u8,
             due_ttl: due_ttl as u8,
-            max_unknown: max_unknown as u32,
+            max_unknown,
+            // Clamped to 0..=128 above.
             max_display_path: max_display_path as usize,
-            probe_timeout: Duration::from_secs(self.timeout as u64),
+            probe_timeout: Duration::from_secs(probe_timeout),
             grace_time: self.gracetime,
-            cache_timeout: self.cache.map(|c| Duration::from_secs(c as u64)),
+            cache_timeout: cache_timeout.map(Duration::from_secs),
             remote_port,
             local_port,
             interface: self.interface.clone(),
@@ -642,6 +701,27 @@ mod tests {
 
     fn opts(args: &[&str]) -> Result<Options, String> {
         parse(args).into_options(false)
+    }
+
+    #[test]
+    fn non_finite_and_huge_seconds_are_rejected() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+            assert_eq!(
+                validate_seconds("wait time", bad),
+                Err("wait time must be positive".to_string()),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            validate_seconds("grace time", 1e300),
+            Err("grace time is too large".to_string())
+        );
+        assert_eq!(validate_seconds("wait time", 0.5), Ok(()));
+        // Through the parser: `-i inf` and `-G nan` are refused at the command line.
+        let err = parse(&["-i", "inf", "h"]).into_options(true).unwrap_err();
+        assert_eq!(err, "wait time must be positive");
+        let err = parse(&["-G", "nan", "h"]).into_options(true).unwrap_err();
+        assert_eq!(err, "grace time must be positive");
     }
 
     #[test]
@@ -837,7 +917,7 @@ mod tests {
         );
         assert_eq!(
             opts(&["-Z", "0", "h"]).unwrap_err(),
-            "timeout must be positive"
+            "timeout must be between 1 and 2147483647"
         );
         assert_eq!(
             opts(&["-D", "0", "h"]).unwrap_err(),
@@ -855,7 +935,11 @@ mod tests {
             opts(&["-m", "4", "-D", "9", "h"]).unwrap_err(),
             "dueTTL(9) cannot be larger than maxTTL(4)."
         );
-        let o = opts(&["-f", "0", "-m", "999", "-U", "0", "-E", "500", "h"]).unwrap();
+        assert_eq!(
+            opts(&["-U", "0", "h"]).unwrap_err(),
+            "max unknown must be between 1 and 2147483647"
+        );
+        let o = opts(&["-f", "0", "-m", "999", "-U", "1", "-E", "500", "h"]).unwrap();
         assert_eq!(
             (
                 o.config.first_ttl,
@@ -986,9 +1070,126 @@ mod tests {
         );
         assert_eq!(
             parse_rtt_thresholds("5,-10,20,40"),
-            Err("rtt thresholds must be positive".to_string())
+            Err("rtt-thresholds values must be between 0 and 86400000 ms".to_string())
+        );
+        assert_eq!(
+            parse_rtt_thresholds("5,10,20,86400001"),
+            Err("rtt-thresholds values must be between 0 and 86400000 ms".to_string())
         );
         assert!(Args::try_parse_from(["mtr", "--rtt-thresholds", "5,4,3,2", "h"]).is_err());
+    }
+
+    #[test]
+    fn out_of_range_integers_are_errors_not_wraps() {
+        let cases = [
+            // Both the attached and the separated form reach the range check; see
+            // `separated_negative_values_reach_the_range_checks` for the `-M -1` spelling.
+            (
+                &["--mark=-1", "h"][..],
+                "mark must be between 0 and 4294967295",
+            ),
+            (
+                &["-M", "4294967296", "h"],
+                "mark must be between 0 and 4294967295",
+            ),
+            (
+                &["--report-cycles=-5", "h"],
+                "report cycles must be between 0 and 2147483647",
+            ),
+            (
+                &["-c", "2147483648", "h"],
+                "report cycles must be between 0 and 2147483647",
+            ),
+            (
+                &["-U", "0", "h"],
+                "max unknown must be between 1 and 2147483647",
+            ),
+            (
+                &["-U", "2147483648", "h"],
+                "max unknown must be between 1 and 2147483647",
+            ),
+            (
+                &["-Z", "2147483648", "h"],
+                "timeout must be between 1 and 2147483647",
+            ),
+            (
+                &["-Z", "0", "h"],
+                "timeout must be between 1 and 2147483647",
+            ),
+            (
+                &["--cache", "2147483648", "h"],
+                "cache timeout must be between 1 and 2147483647",
+            ),
+            // C's own message for --cache <= 0 (mtr.c:785-787) is kept.
+            (&["--cache", "0", "h"], "cache timeout must be positive"),
+        ];
+        for (argv, msg) in cases {
+            let err = parse(argv).into_options(true).unwrap_err();
+            assert_eq!(err, msg, "{argv:?}");
+        }
+        let o = parse(&["-M", "4294967295", "h"])
+            .into_options(true)
+            .unwrap();
+        assert_eq!(o.config.mark, u32::MAX);
+        let o = parse(&["-c", "0", "-U", "1", "h"])
+            .into_options(true)
+            .unwrap();
+        assert_eq!((o.config.max_ping, o.config.max_unknown), (0, 1));
+        assert!(o.config.force_max_ping);
+    }
+
+    /// C's getopt(3) takes the option argument of `-M -1` verbatim, so the value has to reach
+    /// our range check rather than be read as an unknown flag: every numeric option is declared
+    /// `allow_negative_numbers`. A host name cannot start with `-`, so the positional argument
+    /// is unaffected.
+    #[test]
+    fn separated_negative_values_reach_the_range_checks() {
+        let cases = [
+            (
+                &["-M", "-1", "h"][..],
+                "mark must be between 0 and 4294967295",
+            ),
+            (
+                &["-c", "-1", "h"],
+                "report cycles must be between 0 and 2147483647",
+            ),
+            (
+                &["-U", "-1", "h"],
+                "max unknown must be between 1 and 2147483647",
+            ),
+            (
+                &["-Z", "-1", "h"],
+                "timeout must be between 1 and 2147483647",
+            ),
+            (&["--cache", "-1", "h"], "cache timeout must be positive"),
+            (&["-i", "-1", "h"], "wait time must be positive"),
+            (&["-G", "-1", "h"], "grace time must be positive"),
+        ];
+        for (argv, msg) in cases {
+            let err = parse(argv).into_options(true).unwrap_err();
+            assert_eq!(err, msg, "{argv:?}");
+        }
+        // The host after a negative value is still parsed as the target.
+        let o = parse(&["-c", "-0", "example.com"])
+            .into_options(true)
+            .unwrap();
+        assert_eq!(o.targets[0].name, "example.com");
+    }
+
+    /// C uses getopt(3), where `-m -4` takes `-4` as the *value* of `-m`: the family flag is
+    /// consumed, `atoi("-4")` gives -4 and mtr.c:733-741 clamps it to 1. `allow_negative_numbers`
+    /// reproduces that exactly; pinned here so it stays deliberate rather than incidental.
+    #[test]
+    fn numeric_options_consume_a_following_family_flag_as_c_getopt_does() {
+        let o = parse(&["-m", "-4", "host"]).into_options(true).unwrap();
+        assert_eq!(o.config.max_ttl, 1);
+        assert_eq!(o.af, AddressFamily::Unspec);
+        assert_eq!(o.targets[0].name, "host");
+        // Deviation 35: the same swallowing on a range-checked option is an error, not a clamp.
+        assert_eq!(
+            parse(&["-c", "-1", "host"]).into_options(true).unwrap_err(),
+            "report cycles must be between 0 and 2147483647"
+        );
     }
 
     #[test]

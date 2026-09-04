@@ -119,9 +119,7 @@ pub fn parse_prompt(
             let f: f64 = text
                 .parse()
                 .map_err(|_| format!("invalid argument: '{text}'"))?;
-            if f.is_nan() || f <= 0.0 {
-                return Err("wait time must be positive".to_string());
-            }
+            crate::cli::validate_seconds("wait time", f)?;
             if !is_root && f < 1.0 {
                 return Err("non-root users cannot request an interval < 1.0 seconds".to_string());
             }
@@ -340,6 +338,13 @@ mod tests {
         ui.help = true;
         assert_eq!(map_key(ch('x'), &ui), Input::Ui(UiAction::CloseOverlay));
         assert_eq!(map_key(ch('q'), &ui), Input::Ui(UiAction::Quit(Quit::Key)));
+    }
+
+    #[test]
+    fn interval_prompt_rejects_infinity() {
+        let cfg = Config::default();
+        let err = parse_prompt(PromptKind::Interval, "inf", &cfg, true).unwrap_err();
+        assert_eq!(err, "wait time must be positive");
     }
 
     #[test]

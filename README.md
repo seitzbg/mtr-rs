@@ -62,8 +62,8 @@ Binaries only, without man pages or completions:
     target/release/mtr --report-on-exit example.org   # print the -r report when the TUI closes
     target/release/mtr -r -c 5 example.org            # classic report
     target/release/mtr -rwz -c 5 example.org          # wide report with AS numbers
-    target/release/mtr -j example.org | jq .          # JSON, same schema as C mtr
-    MTR_RS_LOG=/tmp/mtr.log target/release/mtr 1.1.1.1  # debug log (never written to the screen)
+    target/release/mtr -j example.org | jq .          # JSON, same schema as C mtr (an array when several targets are given)
+    MTR_RS_LOG=/tmp/mtr.log target/release/mtr 1.1.1.1  # debug log (new file only; ignored under sudo)
 
 Keys follow C mtr (`p`/space, `r`, `n`, `z`, `e`, `s`, `b`, `i`, `f`, `m`, `o`, `Q`, `u`/`t`, `?`) plus
 `↑`/`↓`/`j`/`k` to select a hop, `Enter` to toggle the detail pane, `Tab` to switch RTT / Addresses / Log,
@@ -91,6 +91,7 @@ The file only supplies defaults. Precedence, lowest to highest:
 
     [probe]
     interval = 1.0                           # -i
+    gracetime = 5.0                          # -G
     max_ttl = 30                             # -m
     max_unknown = 12                         # -U
     timeout = 10                             # -Z
@@ -126,6 +127,31 @@ reads the first byte of stdin: `setgid(getgid())`, `setuid(getuid())`, a check t
 really changed, and only then the effective, permitted and inheritable capability sets are cleared
 (the order of `drop_elevated_permissions()` in the C `packet/packet.c`). From that point it is an
 ordinary unprivileged process serving requests on the sockets it already holds.
+
+The one exception is `CAP_NET_ADMIN`, which the drop keeps — and keeps *only* when the process held it
+going in, in the effective and permitted sets, never in the inheritable one — because `SO_MARK` is set
+per probe, after the drop. That covers a helper given the capability with `setcap` and a helper run as
+root, which holds it by uid; in both cases everything else, `cap_net_raw` included, still goes. So
+`-M`/`--mark` needs `cap_net_admin` on the helper, and the client's own route lookup (a `connect()` on
+a marked UDP socket) needs it too, which in practice means running `mtr` as root. (`CAP_NET_ADMIN` is
+what the kernel checks for `SO_MARK` here; since Linux 5.17 `cap_net_raw` also unlocks it, but the drop
+removes that one. Inside a user namespace whose network namespace belongs to a different user
+namespace, the capability is not enough and `setsockopt` still fails.) Grant both capabilities to the
+helper with:
+
+    sudo setcap cap_net_raw,cap_net_admin+ep "$(command -v mtr-packet)"
+
+`CAP_NET_ADMIN` is one of Linux's broadest capabilities — interface and routing configuration,
+netfilter rules, promiscuous mode, netlink administration — so keeping it buys far more than
+`SO_MARK`, and the helper holds it for the whole run while parsing packets from the network. The
+drop happens before the first command is read, so a helper that started with the capability keeps
+it on *every* run, including runs that never use `-M`; the same is true under `sudo mtr`, where
+the helper now ends up with `cap_net_admin` instead of an empty effective set. Grant it only if
+you actually use `-M`/`--mark`.
+
+`check-support feature mark` answers `ok` only when the helper really holds `CAP_NET_ADMIN`; C always
+says `ok` and then fails in `setsockopt()`. The packaging (`packaging/debian/postinst`,
+`scripts/install.sh`) grants `cap_net_raw` only, so `--mark` is opt-in.
 
 Without `cap_net_raw` (and without root) the raw sockets fail to open and the helper falls back to
 unprivileged `SOCK_DGRAM` ICMP/UDP sockets with `IP_RECVERR`/`IPV6_RECVERR`, reading ICMP errors off
@@ -175,16 +201,39 @@ In `cargo test` only
 `cmdparse.py TestCommandParse` runs (it needs no privileges); `param.py` and `probe.py` are behind
 `MTR_E2E=1 cargo test -p mtr-packet -- --ignored`.
 
+## Differences from C mtr
+
+The port matches mtr 0.96 byte for byte where it can; each intentional difference is numbered and
+documented in a code comment that cites the C source it departs from (`grep -rni deviation crates`).
+The most recent six:
+
+- 30: `-j` with several targets prints one JSON array; C concatenates objects into invalid JSON.
+- 31: CSV output quotes host names, PTR names and AS text containing commas, quotes or newlines
+  (RFC 4180); C never quotes. Quoting fixes CSV structure only — a field beginning `=`, `+`, `-`
+  or `@` is left as it is, because neutralising spreadsheet formulas would alter the data for
+  every other consumer, so treat mtr CSV as data to parse rather than a file to double-click.
+- 32: `mtr-packet` locates the ICMP header and the quoted headers with the IPv4 IHL field; C
+  assumes a 20-byte header and misparses packets carrying IP options.
+- 33: only `64:ff9b::/96` is treated as the well-known NAT64 prefix; C compares just 32 bits.
+- 34: `mtr-packet` reports `mark` support only when it actually holds `CAP_NET_ADMIN`; C claims
+  support whenever `SO_MARK` was compiled in.
+- 35: C clamps `-U` below 1 to 1 and accepts a negative `-c`; we reject both with a range error.
+
 ## Development
 
     cargo test --workspace                           # unit, scenario and fake-helper tests
     INSTA_UPDATE=always cargo test -p mtr --test tui_snapshots   # accept intended screen changes
     MTR_E2E=1 cargo test -p mtr -- --ignored         # real DNS and the installed C helper
 
+    cargo deny check                                 # advisories, licences, sources
+
     cargo xtask man                                  # target/dist/man/{mtr.8,mtr-packet.8}
     cargo xtask completions                          # target/dist/completions/{mtr.bash,_mtr,mtr.fish}
     cargo xtask dist                                 # both, plus a release build, laid out as
                                                      # target/dist/mtr-rs-<version>-<arch>/{bin,man,completions}
+
+User-visible changes go in `CHANGELOG.md` (Keep a Changelog format) in the same commit; planned
+work lives in `ROADMAP.md`.
 
 ### Releasing
 

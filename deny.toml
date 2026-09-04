@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = [
+  # This workspace's own crates (mtr, mtr-core, mtr-packet, mtr-proto, xtask), matching
+  # upstream mtr.
+  "GPL-2.0-only",
+  # The Rust ecosystem's default dual licence: nearly every dependency here is
+  # "MIT OR Apache-2.0".
+  "MIT",
+  "Apache-2.0",
+  # rustix / linux-raw-sys / wasi offer this as one arm of their triple licence.
+  "Apache-2.0 WITH LLVM-exception",
+  # The ICU4X crates (icu_*, zerovec, yoke, ...) pulled in by idna/url.
+  "Unicode-3.0",
+  # foldhash (via hashbrown) is Zlib-only; tinyvec also offers it.
+  "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The workspace's own crates depend on each other by `path` with no version requirement,
+# which reads as a wildcard. That is intra-workspace, not an unpinned crates.io
+# dependency, so allow it for path deps only; wildcards on registry crates still fail.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
