@@ -330,7 +330,16 @@ pub fn effective_from_args(args: &Args) -> EffectiveConfig {
         detail_pane: args.detail_pane,
         interval: args.interval,
         gracetime: args.gracetime,
-        max_ttl: args.max_ttl,
+        // The one field `Args::into_options` silently normalises rather than rejecting: `-m 999`
+        // runs with 255, so that — not the raw 999 — is the value in effect, and the value to
+        // save. Without the clamp `--init-config -m 999` fails `validate()`'s 1..=255 check while
+        // the same `-m` runs fine. The other fields here are copied verbatim on purpose: interval
+        // and gracetime go through `validate_seconds`, max_unknown and timeout through range
+        // checks, and fields through `validate_fields` — all of which reject rather than adjust,
+        // so the raw value either runs or is refused, and copying it keeps the two in step.
+        // (`first_ttl`, `due_ttl` and `max_display_path` are normalised too, but none of them is
+        // a configuration-file key.)
+        max_ttl: args.max_ttl.clamp(1, 255),
         max_unknown: args.max_unknown,
         timeout: args.timeout,
         dns: !args.no_dns,
@@ -900,6 +909,20 @@ asn = true
             EffectiveConfig::default(),
             "EffectiveConfig::default() has drifted from the clap defaults"
         );
+    }
+
+    #[test]
+    fn init_config_saves_the_clamped_max_ttl_that_is_actually_in_effect() {
+        // `-m 999` runs with 255 (Args::into_options clamps), so that is what gets saved — and
+        // the saved file has to pass the 1..=255 check that 999 would fail.
+        let cfg = effective_from_args(&args(&["-m", "999", "h"]));
+        assert_eq!(cfg.max_ttl, 255);
+        let text = render(&cfg);
+        assert!(text.contains("\nmax_ttl = 255\n"), "{text}");
+        cfg.validate(true).expect("the rendered options must save");
+        assert_eq!(parse(&text).unwrap().file.probe.max_ttl, Some(255));
+        // and the other end of the clamp
+        assert_eq!(effective_from_args(&args(&["-m", "0", "h"])).max_ttl, 1);
     }
 
     #[test]

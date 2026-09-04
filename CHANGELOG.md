@@ -22,6 +22,7 @@ Nothing yet.
 
 ### Fixed
 - Each target name is resolved once; the same-family check reuses the addresses it looked up.
+- `--init-config` saves the clamped `max_ttl` that is actually in effect.
 
 ### Security
 - CI actions moved to their current majors; fuzz targets run for 20 s each on pull requests that touch the parsers.
