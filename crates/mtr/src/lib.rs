@@ -226,7 +226,10 @@ pub async fn run(argv: Vec<String>) -> i32 {
             // stops one target is fatal in the interactive display and a skip in the report
             // modes. `Fatal::Abort` covers source-address validation, interface lookup, route
             // discovery and the helper handshake; a helper that will not start simply fails
-            // again for the next target, which costs one more message and no output.
+            // again for the next target, which costs one more message and no output. It also
+            // covers mid-run failures (terminal or helper pipe errors) that C ends with
+            // `error(EXIT_FAILURE)`; skipping to the next target there is a small, harmless
+            // difference — nothing partial has been printed and the exit status is still 1.
             Err(Fatal::Abort(msg)) => {
                 eprintln!("mtr: {msg}");
                 if msg == helper::fatal_message(&mtr_proto::ResponseKind::PermissionDenied).unwrap()
