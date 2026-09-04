@@ -125,14 +125,31 @@ pub fn decode_mpls(icmp: &[u8]) -> Vec<MplsLabel> {
     Vec::new()
 }
 
+/// Deviation 32: the length of an IPv4 header, taken from its IHL field. C
+/// (`deconstruct_unix.c:167`, :556) hardcodes `sizeof(struct IPHeader)` == 20, so a packet — or a
+/// quoted original datagram — carrying IP options is parsed at the wrong offset. `None` when the
+/// buffer is too short for a minimal header, the version nibble is not 4, IHL < 5, or the header
+/// would run past the end of the buffer.
+fn ip4_header_len(ip: &[u8]) -> Option<usize> {
+    if ip.len() < IP4_HEADER || ip[0] >> 4 != 4 {
+        return None;
+    }
+    let len = usize::from(ip[0] & 0x0F) * 4;
+    if len < IP4_HEADER || len > ip.len() {
+        return None;
+    }
+    Some(len)
+}
+
 /// `handle_inner_ip4_packet()` (deconstruct_unix.c:152-221): the original datagram's headers.
 fn inner4(ip: &[u8]) -> Option<Inner> {
-    if ip.len() < IP4_HEADER + ICMP_HEADER {
+    let header_len = ip4_header_len(ip)?;
+    if ip.len() < header_len + ICMP_HEADER {
         return None;
     }
     let src = IpAddr::V4(Ipv4Addr::new(ip[12], ip[13], ip[14], ip[15]));
     let dst = IpAddr::V4(Ipv4Addr::new(ip[16], ip[17], ip[18], ip[19]));
-    inner_transport(ip[9], src, dst, &ip[IP4_HEADER..])
+    inner_transport(ip[9], src, dst, &ip[header_len..])
 }
 
 /// `handle_inner_ip6_packet()` (deconstruct_unix.c:227-295).
@@ -218,10 +235,11 @@ fn parse_icmp(icmp: &[u8], version: u8) -> Option<Parsed> {
 /// header, the unprivileged DGRAM socket does not.
 pub fn parse_icmp4(packet: &[u8], has_ip_header: bool) -> Option<Parsed> {
     if has_ip_header {
-        if packet.len() < IP4_HEADER + ICMP_HEADER || packet[9] != IPPROTO_ICMP {
+        let header_len = ip4_header_len(packet)?;
+        if packet.len() < header_len + ICMP_HEADER || packet[9] != IPPROTO_ICMP {
             return None;
         }
-        parse_icmp(&packet[IP4_HEADER..], 4)
+        parse_icmp(&packet[header_len..], 4)
     } else {
         parse_icmp(packet, 4)
     }
@@ -334,6 +352,24 @@ mod tests {
         h.extend_from_slice(&dst);
         h
     }
+    /// Like `ip4()`, but with IPv4 options: `options` is padded to a multiple of 4 bytes and the
+    /// IHL nibble and total length are set accordingly.
+    fn ip4_opts(
+        proto: u8,
+        src: [u8; 4],
+        dst: [u8; 4],
+        payload_len: usize,
+        options: &[u8],
+    ) -> Vec<u8> {
+        let mut opts = options.to_vec();
+        while opts.len() % 4 != 0 {
+            opts.push(1); // NOP
+        }
+        let mut h = ip4(proto, src, dst, payload_len + opts.len());
+        h[0] = 0x40 | ((20 + opts.len()) / 4) as u8;
+        h.extend_from_slice(&opts);
+        h
+    }
     fn icmp(t: u8, code: u8, id: u16, seq: u16) -> Vec<u8> {
         let mut v = vec![t, code, 0, 0];
         v.extend_from_slice(&id.to_be_bytes());
@@ -348,6 +384,47 @@ mod tests {
         v.extend_from_slice(&csum.to_be_bytes());
         v.extend_from_slice(&[0; 4]);
         v
+    }
+
+    #[test]
+    fn ipv4_options_are_skipped_in_outer_and_inner_headers() {
+        // Outer: echo reply behind a 24-byte header (one NOP-padded option word).
+        let mut pkt = ip4_opts(IPPROTO_ICMP, [10, 0, 0, 1], [10, 0, 0, 2], 8, &[1, 1, 1, 1]);
+        pkt.extend(icmp(0, 0, 0x1234, 7));
+        let p = parse_icmp4(&pkt, true).unwrap();
+        assert_eq!(p.kind, IcmpKind::EchoReply);
+        assert_eq!(p.echo, Some((0x1234, 7)));
+
+        // Inner: time-exceeded quoting a UDP probe whose IP header carries options.
+        let mut quoted = ip4_opts(IPPROTO_UDP, [10, 0, 0, 2], [10, 0, 0, 9], 12, &[1, 1, 1, 1]);
+        quoted.extend(udp(33000, 33434, 0));
+        let mut outer = ip4(IPPROTO_ICMP, [10, 0, 0, 5], [10, 0, 0, 2], 8 + quoted.len());
+        outer.extend(icmp(11, 0, 0, 0));
+        outer.extend(&quoted);
+        let p = parse_icmp4(&outer, true).unwrap();
+        assert_eq!(p.kind, IcmpKind::TimeExceeded);
+        assert_eq!(
+            p.inner,
+            Some(Inner::Udp {
+                src: "10.0.0.2".parse().unwrap(),
+                dst: "10.0.0.9".parse().unwrap(),
+                src_port: 33000,
+                dst_port: 33434,
+                checksum: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn bogus_ihl_is_rejected() {
+        let mut pkt = ip4(IPPROTO_ICMP, [10, 0, 0, 1], [10, 0, 0, 2], 8);
+        pkt.extend(icmp(0, 0, 1, 1));
+        pkt[0] = 0x44; // IHL 4 (< 5)
+        assert!(parse_icmp4(&pkt, true).is_none());
+        pkt[0] = 0x4f; // IHL 15 = 60 bytes > packet
+        assert!(parse_icmp4(&pkt, true).is_none());
+        pkt[0] = 0x64; // version 6 in an IPv4 packet
+        assert!(parse_icmp4(&pkt, true).is_none());
     }
 
     #[test]
