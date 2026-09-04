@@ -19,6 +19,9 @@ All notable changes to mtr-rs are documented here. The format follows
 ### Fixed
 - Each target name is resolved once; the same-family check reuses the addresses it looked up.
 
+### Security
+- CI actions moved to their current majors; fuzz targets run for 20 s each on pull requests that touch the parsers.
+
 ## [0.1.0] - 2026-09-04
 
 First release of the Rust port of mtr 0.96 (upstream commit 7b01773).

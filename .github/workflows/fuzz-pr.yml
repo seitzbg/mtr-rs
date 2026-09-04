@@ -1,14 +1,19 @@
-name: fuzz-build
+name: fuzz-pr
+# A short smoke run of the same targets fuzz.yml runs nightly, so that a pull
+# request touching a parser gets a few seconds of coverage before it is merged.
 on:
-  schedule:
-    - cron: "17 3 * * *"
-  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/mtr-proto/**"
+      - "crates/mtr-packet/src/backend/linux/deconstruct.rs"
+      - "crates/mtr-packet/fuzz/**"
+      - ".github/workflows/fuzz-pr.yml"
 
 permissions:
   contents: read
 
 jobs:
-  build:
+  smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -20,17 +25,17 @@ jobs:
       - run: cargo install cargo-fuzz --locked
       - run: cargo fuzz build
         working-directory: crates/mtr-proto/fuzz
-      - run: cargo fuzz run parse_request -- -max_total_time=60
+      - run: cargo fuzz run parse_request -- -max_total_time=20
         working-directory: crates/mtr-proto/fuzz
-      - run: cargo fuzz run parse_response -- -max_total_time=60
+      - run: cargo fuzz run parse_response -- -max_total_time=20
         working-directory: crates/mtr-proto/fuzz
-      - run: cargo fuzz run decode_send_probe -- -max_total_time=60
+      - run: cargo fuzz run decode_send_probe -- -max_total_time=20
         working-directory: crates/mtr-proto/fuzz
       - run: cargo fuzz build
         working-directory: crates/mtr-packet/fuzz
-      - run: cargo fuzz run parse_icmp4 -- -max_total_time=60
+      - run: cargo fuzz run parse_icmp4 -- -max_total_time=20
         working-directory: crates/mtr-packet/fuzz
-      - run: cargo fuzz run parse_icmp6 -- -max_total_time=60
+      - run: cargo fuzz run parse_icmp6 -- -max_total_time=20
         working-directory: crates/mtr-packet/fuzz
-      - run: cargo fuzz run decode_mpls -- -max_total_time=60
+      - run: cargo fuzz run decode_mpls -- -max_total_time=20
         working-directory: crates/mtr-packet/fuzz
