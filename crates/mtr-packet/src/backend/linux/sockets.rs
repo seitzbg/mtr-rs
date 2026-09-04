@@ -199,6 +199,93 @@ mod tests {
     use super::*;
     use nix::sys::socket::getsockopt;
 
+    /// Set (any non-empty value, e.g. in CI simulation) to force the two "opens on this box"
+    /// tests below to take the skip path even when the box actually does allow ping/raw
+    /// sockets — used to rehearse the GitHub-runner environment locally.
+    const FORCE_NO_PING_ENV: &str = "MTR_TEST_FORCE_NO_PING";
+
+    fn env_forces_no_ping() -> bool {
+        std::env::var_os(FORCE_NO_PING_ENV).is_some()
+    }
+
+    /// Parses `/proc/sys/net/ipv4/ping_group_range`'s `"lo hi"` (tab- or space-separated).
+    fn parse_ping_group_range(s: &str) -> Option<(u32, u32)> {
+        let mut it = s.split_whitespace();
+        let lo: u32 = it.next()?.parse().ok()?;
+        let hi: u32 = it.next()?.parse().ok()?;
+        Some((lo, hi))
+    }
+
+    /// A range with `lo > hi` (the kernel default, "1 0") allows no gid at all.
+    fn range_allows_gid(range: (u32, u32), gid: u32) -> bool {
+        range.0 <= range.1 && gid >= range.0 && gid <= range.1
+    }
+
+    /// Independent env signal #1: does this process belong to a gid inside
+    /// `ping_group_range`? That's what lets an unprivileged process open a DGRAM ICMP
+    /// ("ping") socket at all, raw or otherwise.
+    fn ping_sockets_allowed() -> bool {
+        if env_forces_no_ping() {
+            return false;
+        }
+        let Ok(contents) = std::fs::read_to_string("/proc/sys/net/ipv4/ping_group_range") else {
+            return false;
+        };
+        let Some(range) = parse_ping_group_range(&contents) else {
+            return false;
+        };
+        if range_allows_gid(range, nix::unistd::getgid().as_raw()) {
+            return true;
+        }
+        // `getgroups()` needs nix's "user" feature, which this crate enables; fall back to
+        // egid-only if that ever changes.
+        nix::unistd::getgroups()
+            .map(|groups| groups.iter().any(|g| range_allows_gid(range, g.as_raw())))
+            .unwrap_or(false)
+    }
+
+    /// Independent env signal #2: CAP_NET_RAW in the effective capability set, per
+    /// `/proc/self/status`'s `CapEff` (bit 13 — see capability.h).
+    fn caps_net_raw() -> bool {
+        if env_forces_no_ping() {
+            return false;
+        }
+        let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+            return false;
+        };
+        for line in status.lines() {
+            if let Some(hex) = line.strip_prefix("CapEff:") {
+                if let Ok(val) = u64::from_str_radix(hex.trim(), 16) {
+                    return val & (1 << 13) != 0;
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether this host has any IPv6 configured at all (even just loopback); empty/missing
+    /// means the kernel has IPv6 fully disabled and `Family::open(6)` has nothing to bind.
+    fn ipv6_available() -> bool {
+        std::fs::read_to_string("/proc/net/if_inet6")
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn ping_group_range_parser_gates_by_gid() {
+        let disallow_all = parse_ping_group_range("1\t0").unwrap();
+        assert!(!range_allows_gid(disallow_all, 0));
+        assert!(!range_allows_gid(disallow_all, 1));
+        assert!(!range_allows_gid(disallow_all, 1000));
+
+        let allow_all = parse_ping_group_range("0\t2147483647").unwrap();
+        assert!(range_allows_gid(allow_all, 0));
+        assert!(range_allows_gid(allow_all, 1000));
+        assert!(range_allows_gid(allow_all, 2147483647));
+
+        assert_eq!(parse_ping_group_range("garbage"), None);
+    }
+
     /// The DGRAM fallback is worthless without `IP_RECVERR`/`IPV6_RECVERR`: it is the only way
     /// a time-exceeded ever reaches us on a ping socket (probe_unix.c:815-819).
     fn assert_recverr(f: &Family) {
@@ -218,10 +305,16 @@ mod tests {
         }
     }
 
-    /// Deliberately ungated: if raw *and* DGRAM opening both regress this must fail loudly
-    /// rather than skip (Task 7 review). Every box mtr runs on has one or the other.
+    /// Gated only on an *independent* environment signal (CAP_NET_RAW or an allowed ping
+    /// group), never on `dgram_available()`/`Family::open().is_ok()` — that would make this
+    /// test pass vacuously if opening ever regressed (Task 7 review). On a box with neither
+    /// signal (e.g. a GitHub-hosted runner with default `ping_group_range` and no
+    /// `cap_net_raw`) neither raw nor DGRAM sockets can open, so we skip instead of failing.
     #[test]
     fn ipv4_opens_raw_or_falls_back_to_dgram_with_recverr() {
+        if !caps_net_raw() && !ping_sockets_allowed() {
+            return;
+        }
         let f = Family::open(4).expect("raw sockets with cap_net_raw, else open ping sockets");
         assert_eq!(f.version, 4);
         // Unprivileged test processes get the DGRAM pair; with cap_net_raw the raw triple.
@@ -239,6 +332,12 @@ mod tests {
 
     #[test]
     fn ipv6_opens_too_on_this_box() {
+        if !caps_net_raw() && !ping_sockets_allowed() {
+            return;
+        }
+        if !ipv6_available() {
+            return;
+        }
         // The box has link-local + ULA IPv6 but no global address; opening the sockets and
         // reaching `::1` works regardless, which is all this test and the v6 loopback tests need.
         let f = Family::open(6).expect("IPv6 sockets open (loopback IPv6 is always present)");

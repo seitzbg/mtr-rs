@@ -13,6 +13,13 @@ jobs:
           python-version: "3.x"
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Allow unprivileged ping (DGRAM ICMP) sockets
+        # GitHub-hosted runners give the job process neither cap_net_raw nor a gid inside
+        # the default ping_group_range ("1 0", i.e. nobody), so mtr-packet's raw-then-DGRAM
+        # socket-open tests have no fallback available and would otherwise skip. Widening
+        # the range lets the DGRAM path actually exercise on CI instead of only locally.
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
       - run: cargo test --workspace
         env:
           INSTA_UPDATE: "no"
