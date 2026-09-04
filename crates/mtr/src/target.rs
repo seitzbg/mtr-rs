@@ -28,6 +28,7 @@ fn unmap(ip: IpAddr, af: AddressFamily) -> IpAddr {
 
 /// First `getaddrinfo()` result in the requested family.
 pub async fn resolve_target(name: &str, af: AddressFamily) -> Result<IpAddr, String> {
+    tracing::debug!(host = name, "resolve");
     if let Ok(ip) = name.parse::<IpAddr>() {
         let ip = unmap(ip, af);
         return if family_ok(ip, af) {

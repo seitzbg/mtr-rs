@@ -443,3 +443,35 @@ fn json_keeps_finished_targets_when_a_later_one_aborts() {
     assert!(!out.contains("192.0.2.2"), "{out}");
     assert!(err.contains("startup check"), "{err}");
 }
+
+/// The report-mode preflight settles the address family for every target, and the run then needs
+/// each address again: it must reuse what the preflight looked up rather than call the resolver a
+/// second time (one extra DNS round trip per target, and a chance of two different answers).
+#[test]
+fn each_target_is_resolved_once() {
+    let dir = std::env::temp_dir().join(format!("mtr-rs-cli-resolve-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("mtr.log");
+    let mut c = mtr();
+    c.env(
+        "MTR_PACKET",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-mtr-packet.py"),
+    )
+    .env("MTR_RS_LOG", &log)
+    .env("MTR_RS_LOG_LEVEL", "debug");
+    let o = c
+        .args(["-r", "-n", "-c", "1", "-G", "0.2", "192.0.2.1", "192.0.2.2"])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0), "{:?}", o.stderr);
+    let text = std::fs::read_to_string(&log).unwrap();
+    let resolves: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("mtr::target: resolve"))
+        .collect();
+    assert_eq!(resolves.len(), 2, "{text}");
+    assert!(resolves[0].contains("192.0.2.1"), "{text}");
+    assert!(resolves[1].contains("192.0.2.2"), "{text}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
