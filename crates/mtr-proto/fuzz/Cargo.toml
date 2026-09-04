@@ -28,3 +28,10 @@ path = "fuzz_targets/parse_response.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "decode_send_probe"
+path = "fuzz_targets/decode_send_probe.rs"
+test = false
+doc = false
+bench = false

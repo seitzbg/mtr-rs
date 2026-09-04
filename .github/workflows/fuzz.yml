@@ -16,3 +16,5 @@ jobs:
         working-directory: crates/mtr-proto/fuzz
       - run: cargo fuzz run parse_response -- -max_total_time=60
         working-directory: crates/mtr-proto/fuzz
+      - run: cargo fuzz run decode_send_probe -- -max_total_time=60
+        working-directory: crates/mtr-proto/fuzz

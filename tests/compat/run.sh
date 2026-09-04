@@ -5,8 +5,11 @@
 #        tests/compat/run.sh --compare [suite...]      # ours vs the C baseline
 #        tests/compat/run.sh --report-only [suite...]  # same, but never fails
 #        tests/compat/run.sh --self-test               # check the output parser
-# options: --listen-seq N (or $MTR_LISTEN_SEQUENCE) rebuilds test/mtr-packet-listen
-#          with -DSEQUENCE_NUM=N, see the param.py note in the known-divergence list
+# options: --listen-seq N rebuilds test/mtr-packet-listen with SEQUENCE_NUM = N (it then
+#          needs its own setcap again); $MTR_LISTEN_SEQUENCE alone only *declares* the
+#          sequence an already-built, already-setcap'd listener was compiled for, which is
+#          what CI does. Either way, a listener built for our MIN_PORT takes param.py off
+#          the known-divergence list: its failures are then real regressions.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -19,11 +22,23 @@ report_only=0
 listen_seq_reason="test/packet_listen.c hard-codes SEQUENCE_NUM 33000 while upstream commit e95eaf4 moved MIN_PORT to 33434; our helper (and the C 0.96 helper) start at 33434, so the listener times out. Rerun with --listen-seq 33434 (needs its own setcap) to verify positively"
 known_divergences=(
     "__main__.TestProbeICMPv4.test_exhaust_probes|sends 4096 probes; mtr 0.96 (7b01773) raised MAX_PROBES to 10240 so neither our helper nor C 0.96 can exhaust the table; the installed 0.95 baseline (MAX_PROBES 1024) passes"
-    "__main__.TestParameters.test_size|$listen_seq_reason"
-    "__main__.TestParameters.test_pattern|$listen_seq_reason"
-    "__main__.TestParameters.test_tos|$listen_seq_reason"
-    "__main__.TestIPv6Parameters.test_param|$listen_seq_reason"
 )
+
+# The four param.py ids only diverge while the listener still waits for sequence 33000.
+# Once it has been rebuilt at our MIN_PORT they must gate: a failure there is a real
+# size/TOS/bit-pattern regression, and masking it would let --compare exit 0.
+add_listen_divergences() {
+    case "${MTR_LISTEN_SEQUENCE:-33000}" in
+        33000) ;;
+        *) return 0 ;;
+    esac
+    known_divergences+=(
+        "__main__.TestParameters.test_size|$listen_seq_reason"
+        "__main__.TestParameters.test_pattern|$listen_seq_reason"
+        "__main__.TestParameters.test_tos|$listen_seq_reason"
+        "__main__.TestIPv6Parameters.test_param|$listen_seq_reason"
+    )
+}
 
 known_reason() {
     local entry
@@ -52,7 +67,10 @@ listen_ready() {
         src="$root/target/compat/packet_listen-$MTR_LISTEN_SEQUENCE.c"
         sed "s/^#define SEQUENCE_NUM .*/#define SEQUENCE_NUM $MTR_LISTEN_SEQUENCE/" \
             "$repo/test/packet_listen.c" > "$src"
-        rm -f "$repo/test/mtr-packet-listen"
+        # Only discard an existing listener when --listen-seq asked for the rebuild. A
+        # listener the caller built *and* setcap'd for this sequence (CI does exactly that)
+        # must survive, or rebuilding it here would silently strip its cap_net_raw.
+        if [ "$listen_rebuild" = 1 ]; then rm -f "$repo/test/mtr-packet-listen"; fi
     fi
     if [ ! -x "$repo/test/mtr-packet-listen" ]; then
         cc -I"$repo" -o "$repo/test/mtr-packet-listen" "$src" >&2
@@ -88,14 +106,17 @@ capture_suite() {
     rm -f "$out"
 }
 
-# Turn verbose unittest output into "<test id> <status>" lines. The parenthesised
+# Turn verbose unittest output into "<test id> <status>" lines. Only lines starting with a
+# method name ("test..." — unittest only collects those) begin a test; a test with a docstring
+# prints the docstring on the next line, and one shaped "Word (something)" would otherwise be
+# mistaken for the next test id. The parenthesised
 # text is the class alone on Python <= 3.10 ("test_x (__main__.C) ... ok") and the
 # full id on Python >= 3.11 ("test_x (__main__.C.test_x) ... ok"), so we always
 # rebuild "<class>.<method>" from the leading method name; comparing by class only
 # would let an ours-only failure hide behind a baseline failure in the same class.
 parse_results() {
     awk '
-        /^[A-Za-z_][A-Za-z0-9_]* \(.*\)/ {
+        /^test[A-Za-z0-9_]* \(.*\)/ {
             method = $1
             p = index($0, "("); rest = substr($0, p + 1)
             q = index(rest, ")"); id = substr(rest, 1, q - 1)
@@ -168,7 +189,7 @@ __main__.C.test_x ok'
     got=$(printf '%s\n' \
         "test_x (__main__.C) ... FAIL" \
         "test_x (__main__.C.test_x)" \
-        "the docstring ... ok" | parse_results)
+        "Probe (with a parenthesis) in the docstring ... ok" | parse_results)
     if [ "$got" = "$want" ]; then
         echo "self-test ok"
     else
@@ -177,7 +198,11 @@ __main__.C.test_x ok'
     fi
 }
 
-if [ "${1:-}" = "--listen-seq" ]; then MTR_LISTEN_SEQUENCE=${2:?--listen-seq needs a number}; shift 2; fi
+listen_rebuild=0
+if [ "${1:-}" = "--listen-seq" ]; then
+    MTR_LISTEN_SEQUENCE=${2:?--listen-seq needs a number}; listen_rebuild=1; shift 2
+fi
+add_listen_divergences
 
 case "${1:?suite name or --compare}" in
     --self-test) self_test ;;
