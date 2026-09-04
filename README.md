@@ -195,6 +195,10 @@ baseline. `param.py` and `probe.py` need capabilities:
     sudo setcap cap_net_raw+ep target/debug/mtr-rs-packet
     sudo setcap cap_net_raw+ep "$MTR_C_REPO"/test/mtr-packet-listen   # built on demand by run.sh
 
+IPv6 cases need an IPv6-capable host; GitHub runners have none, so they run only locally
+(`tests/compat/run.sh probe` on a dual-stack box) — upstream's `HAVE_IPV6` probe skips them
+in CI, where `probe.py` therefore gates on its IPv4 cases alone.
+
 `param.py` skips itself with a message when the listener lacks `cap_net_raw`. Its four tests are on
 the known-divergence list *while the listener is the stock one*: upstream's `test/packet_listen.c`
 still hard-codes `SEQUENCE_NUM 33000`, but mtr commit e95eaf4 moved `MIN_PORT` to 33434 in

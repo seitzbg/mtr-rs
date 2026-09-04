@@ -1,5 +1,8 @@
 name: ci
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -57,9 +60,10 @@ jobs:
   #     against the raw-ICMP listener we build and setcap below, rebuilt at MIN_PORT so
   #     it is not on the known-divergence list). Both gate: `--compare` fails the job on
   #     any failure of ours.
-  #   * probe.py runs under --report-only: it needs the public internet (8.8.8.8,
-  #     Google's IPv6 DNS), so its summary is in the log for inspection but does not
-  #     gate. Install a C helper and set MTR_BASELINE to make it gating too.
+  #   * probe.py gates too, on its IPv4 cases: they need the public internet (8.8.8.8),
+  #     which runners have, and three consecutive runs of the compare step passed. Its
+  #     remote IPv6 cases (Google's IPv6 DNS) are skipped by upstream's HAVE_IPV6 probe
+  #     because GitHub runners have no IPv6, so they only run locally on a dual-stack box.
   helper-compat:
     runs-on: ubuntu-latest
     needs: test
@@ -96,8 +100,8 @@ jobs:
           # The listener above was compiled for our MIN_PORT, so param.py's four ids
           # come off the known-divergence list and gate (see run.sh --listen-seq).
           MTR_LISTEN_SEQUENCE: "33434"
-      - name: probe (report only, needs the public internet)
-        run: tests/compat/run.sh --report-only probe
+      - name: probe (must pass; IPv4 cases need the public internet)
+        run: tests/compat/run.sh --compare probe
         env:
           MTR_PACKET: ${{ github.workspace }}/target/debug/mtr-rs-packet
           MTR_C_REPO: ${{ github.workspace }}/mtr-c
