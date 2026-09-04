@@ -5,7 +5,6 @@ promise of a date.
 
 ## 0.2
 
-- Footer key hints: keep the `n`/`z`/`e` toggles visible at 80 columns.
 - IPv6 compat cases in CI need a self-hosted or IPv6-capable runner.
 
 ## 2.0

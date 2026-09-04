@@ -240,9 +240,10 @@ pub async fn run(argv: Vec<String>) -> i32 {
     let mut json_docs: Vec<String> = Vec::new();
     let run_list = targets_to_run(opts.mode, &opts.targets);
     // The preflight covers every target, and it only runs in the report modes, where `run_list`
-    // is the whole slice — so pairing the two by position is exactly right. `zip` states that
-    // instead of asserting it: a shorter list would silently run fewer targets, which the
-    // `debug_assert` catches in the tests.
+    // is the whole slice — so pairing the two by position is exactly right. The loop below pulls
+    // from `preflight` with `Iterator::next` and falls back to resolving on the spot once it runs
+    // out, so a short preflight would just re-resolve the remainder rather than run fewer targets;
+    // the `debug_assert` below still pins the lengths matching in the tests.
     debug_assert!(
         preflight
             .as_ref()

@@ -218,8 +218,8 @@ fn toml_message(text: &str, e: &toml::de::Error) -> String {
 const DEFAULT_FIELDS: &str = "LS NABWV";
 
 /// The values `--init-config` writes: one field per configuration key, holding the value that is
-/// actually in effect — the built-in default, or whatever the existing file, `$MTR_OPTIONS` or
-/// the command line put in its place.
+/// actually in effect — the built-in default, or whatever `$MTR_OPTIONS` or the command line put
+/// in its place.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EffectiveConfig {
     pub rtt_thresholds: RttThresholds,
@@ -309,10 +309,10 @@ impl From<&EffectiveConfig> for FileConfig {
     }
 }
 
-/// The options in effect at the point `run()` calls it: [`apply`] has already merged the existing
-/// file into `args`, and clap merged `$MTR_OPTIONS` and the command line before that. The colour
-/// resolution mirrors [`Args::into_options`], minus the `NO_COLOR` lookup — that is a property of
-/// the terminal the file is written on, not a setting to save.
+/// The options in effect at the point `run()` calls it: clap has already merged `$MTR_OPTIONS` and
+/// the command line into `args`. The colour resolution mirrors [`Args::into_options`], minus the
+/// `NO_COLOR` lookup — that is a property of the terminal the file is written on, not a setting to
+/// save.
 pub fn effective_from_args(args: &Args) -> EffectiveConfig {
     EffectiveConfig {
         rtt_thresholds: args.rtt_thresholds.unwrap_or_default(),

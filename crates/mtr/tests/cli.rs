@@ -477,7 +477,7 @@ fn each_target_is_resolved_once() {
 }
 
 /// `--init-config` saves the options in effect, not only the built-in defaults: the flags on the
-/// command line (and `$MTR_OPTIONS`, and an existing file) are written out as uncommented keys.
+/// command line (and `$MTR_OPTIONS`) are written out as uncommented keys.
 #[test]
 fn init_config_writes_the_effective_options() {
     let path = temp_config("effective", "");

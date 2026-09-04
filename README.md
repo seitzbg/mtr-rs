@@ -255,8 +255,10 @@ work lives in `ROADMAP.md`.
 
 ### Releasing
 
-1. Bump `version` under `[workspace.package]` in the root `Cargo.toml`, run `cargo check --workspace`
-   so `Cargo.lock` follows, and commit.
+1. Bump `version` under `[workspace.package]` in the root `Cargo.toml`, and the two
+   `version = "0.x.0"` path-dependency pins on `mtr-proto`/`mtr-core` under `[workspace.dependencies]`
+   (cargo-deny's wildcard ban needs them kept in step; a mismatch breaks the build). Run
+   `cargo check --workspace` so `Cargo.lock` follows, and commit.
 2. `git tag v0.1.0 && git push --tags`. The tag must be the workspace version with a leading `v`;
    `.github/workflows/release.yml` compares them and fails the job otherwise.
 3. The `release` workflow builds x86_64 and aarch64, runs `scripts/check-deb.sh`, and attaches
