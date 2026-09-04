@@ -6,7 +6,7 @@ fn main() -> ExitCode {
     match mtr_packet::run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("mtr-packet: {e}");
+            eprintln!("{}: {e}", mtr_packet::PROGRAM);
             ExitCode::FAILURE
         }
     }

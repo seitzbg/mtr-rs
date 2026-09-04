@@ -2,7 +2,7 @@ use std::io::Write as _;
 use std::process::{Command, Stdio};
 
 fn mtr() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_mtr"));
+    let mut c = Command::new(env!("CARGO_BIN_EXE_mtr-rs"));
     // Point the config file at a directory that cannot exist, so these tests never pick up the
     // developer's own ~/.config/mtr-rs/config.toml.
     c.env_remove("MTR_OPTIONS")
@@ -23,7 +23,7 @@ fn run(args: &[&str]) -> (Option<i32>, String, String) {
 fn version_flag() {
     let (code, out, _) = run(&["-v"]);
     assert_eq!(code, Some(0));
-    assert_eq!(out, format!("mtr {}\n", env!("CARGO_PKG_VERSION")));
+    assert_eq!(out, format!("mtr-rs {}\n", env!("CARGO_PKG_VERSION")));
     let (_, out, _) = run(&["-vv"]);
     assert!(out.contains("features:"));
 }
@@ -39,7 +39,7 @@ fn c_validation_messages_reach_stderr_with_exit_one() {
     let (code, _, err) = run(&["-u", "-T", "-r", "127.0.0.1"]);
     assert_eq!(code, Some(1));
     assert!(
-        err.contains("mtr: -u , -T and -S are mutually exclusive"),
+        err.contains("mtr-rs: -u , -T and -S are mutually exclusive"),
         "{err}"
     );
     let (code, _, err) = run(&["-P", "80", "-r", "127.0.0.1"]);
@@ -151,7 +151,7 @@ fn a_malformed_config_file_is_fatal_with_its_path_and_line() {
     let (code, _, err) = run(&["--config", path.to_str().unwrap(), "-r", "127.0.0.1"]);
     assert_eq!(code, Some(1), "{err}");
     assert!(
-        err.starts_with(&format!("mtr: config: {}: ", path.display())),
+        err.starts_with(&format!("mtr-rs: config: {}: ", path.display())),
         "{err}"
     );
     assert!(err.contains("line 3"), "{err}");
@@ -321,7 +321,7 @@ fn a_bad_default_config_is_fatal_too() {
     assert_eq!(o.status.code(), Some(1), "{err}");
     assert!(
         err.contains(&format!(
-            "mtr: config: {}: value out of range (1 - 255): 0",
+            "mtr-rs: config: {}: value out of range (1 - 255): 0",
             path.display()
         )),
         "{err}"
@@ -442,4 +442,71 @@ fn json_keeps_finished_targets_when_a_later_one_aborts() {
     assert!(out.contains("192.0.2.1"), "{out}");
     assert!(!out.contains("192.0.2.2"), "{out}");
     assert!(err.contains("startup check"), "{err}");
+}
+
+/// The report-mode preflight settles the address family for every target, and the run then needs
+/// each address again: it must reuse what the preflight looked up rather than call the resolver a
+/// second time (one extra DNS round trip per target, and a chance of two different answers).
+#[test]
+fn each_target_is_resolved_once() {
+    let dir = std::env::temp_dir().join(format!("mtr-rs-cli-resolve-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("mtr.log");
+    let mut c = mtr();
+    c.env(
+        "MTR_PACKET",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-mtr-packet.py"),
+    )
+    .env("MTR_RS_LOG", &log)
+    .env("MTR_RS_LOG_LEVEL", "debug");
+    let o = c
+        .args(["-r", "-n", "-c", "1", "-G", "0.2", "192.0.2.1", "192.0.2.2"])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0), "{:?}", o.stderr);
+    let text = std::fs::read_to_string(&log).unwrap();
+    let resolves: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("mtr::target: resolve"))
+        .collect();
+    assert_eq!(resolves.len(), 2, "{text}");
+    assert!(resolves[0].contains("192.0.2.1"), "{text}");
+    assert!(resolves[1].contains("192.0.2.2"), "{text}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `--init-config` saves the options in effect, not only the built-in defaults: the flags on the
+/// command line (and `$MTR_OPTIONS`) are written out as uncommented keys.
+#[test]
+fn init_config_writes_the_effective_options() {
+    let path = temp_config("effective", "");
+    let arg = path.to_str().unwrap();
+    let o = mtr()
+        .env("MTR_OPTIONS", "-Z 3")
+        .args(["--init-config", "--config", arg, "-i", "2", "-n"])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0), "{:?}", o.stderr);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("\ninterval = 2.0\n"), "{text}");
+    assert!(text.contains("\ndns = false\n"), "{text}");
+    assert!(text.contains("\ntimeout = 3\n"), "{text}");
+    // everything untouched stays commented out at its default
+    assert!(text.contains("\n#gracetime = 5.0\n"), "{text}");
+    // and the file it wrote loads back and takes effect
+    let mut c = mtr();
+    c.env(
+        "MTR_PACKET",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-mtr-packet.py"),
+    );
+    let o = c
+        .args(["--config", arg, "-r", "-c", "1", "-G", "0.2", "192.0.2.1"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(0), "{out}{err}");
+    assert!(out.contains("Start: "), "{out}{err}");
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }

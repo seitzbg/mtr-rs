@@ -2,7 +2,7 @@
 source: crates/mtr/tests/tui_snapshots.rs
 expression: "render(&f, 60, 12)"
 ---
-"mtr 0.1.0  →  target.example (192.0.2.10)   ICMP/IP 12:34:56"
+"mtr-rs 0.1.0  →  target.example (192.0.2.10)   ICMP 12:34:56"
 "  ╭ Keys ────────────────────────────────────────────────╮v "
 "▶ │?|h     help                       q       quit       │2 "
 "  │p       pause (SPACE to resume)    r       reset all  │  "

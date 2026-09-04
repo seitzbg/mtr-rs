@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Privileged probe helper for mtr-rs, wire-compatible with mtr 0.96's mtr-packet"
 
 [[bin]]
-name = "mtr-packet"
+name = "mtr-rs-packet"
 path = "src/main.rs"
 
 [dependencies]

@@ -1,6 +1,6 @@
 [package]
 name = "mtr"
-description = "mtr - a network diagnostic tool (Rust port)"
+description = "mtr-rs - a network diagnostic tool (Rust port of mtr)"
 homepage = "https://github.com/seitzbg/mtr-rs"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "mtr"
+name = "mtr-rs"
 path = "src/main.rs"
 
 [dependencies]
@@ -47,25 +47,22 @@ copyright = "mtr-rs contributors; a Rust port of mtr (GPL-2.0-only)"
 license-file = ["../../LICENSE", "0"]
 extended-description = """\
 Rust port of mtr (My TraceRoute) with an interactive terminal UI, the classic
-report/JSON/CSV modes, and a privileged probe helper (mtr-packet) that is
-wire-compatible with mtr 0.96. Installs /usr/bin/mtr and /usr/bin/mtr-packet
-and therefore conflicts with the distribution's mtr packages."""
+report/JSON/CSV modes, and a privileged probe helper (mtr-rs-packet) that is
+wire-compatible with mtr 0.96's mtr-packet. Installs /usr/bin/mtr-rs and
+/usr/bin/mtr-rs-packet alongside any distribution mtr."""
 section = "net"
 priority = "optional"
 depends = "$auto, libcap2-bin"  # postinst runs setcap(8)
-conflicts = "mtr, mtr-tiny"
-# It owns /usr/bin/mtr and /usr/bin/mtr-packet, so it stands in for the distro packages
-# (Provides) and takes over their files (Replaces) as well as conflicting with them.
-provides = "mtr, mtr-tiny"
-replaces = "mtr, mtr-tiny"
+# No conflicts/provides/replaces: this package owns only /usr/bin/mtr-rs and
+# /usr/bin/mtr-rs-packet, so it installs alongside the distribution's mtr / mtr-tiny.
 maintainer-scripts = "../../packaging/debian"
 assets = [
-    ["target/release/mtr", "usr/bin/", "755"],
-    ["target/release/mtr-packet", "usr/bin/", "755"],
-    ["../../target/dist/man/mtr.8", "usr/share/man/man8/", "644"],
-    ["../../target/dist/man/mtr-packet.8", "usr/share/man/man8/", "644"],
-    ["../../target/dist/completions/mtr.bash", "usr/share/bash-completion/completions/mtr", "644"],
-    ["../../target/dist/completions/_mtr", "usr/share/zsh/site-functions/_mtr", "644"],
-    ["../../target/dist/completions/mtr.fish", "usr/share/fish/vendor_completions.d/mtr.fish", "644"],
+    ["target/release/mtr-rs", "usr/bin/", "755"],
+    ["target/release/mtr-rs-packet", "usr/bin/", "755"],
+    ["../../target/dist/man/mtr-rs.8", "usr/share/man/man8/", "644"],
+    ["../../target/dist/man/mtr-rs-packet.8", "usr/share/man/man8/", "644"],
+    ["../../target/dist/completions/mtr-rs.bash", "usr/share/bash-completion/completions/mtr-rs", "644"],
+    ["../../target/dist/completions/_mtr-rs", "usr/share/zsh/site-functions/_mtr-rs", "644"],
+    ["../../target/dist/completions/mtr-rs.fish", "usr/share/fish/vendor_completions.d/mtr-rs.fish", "644"],
     ["../../docs/config.example.toml", "usr/share/doc/mtr-rs/config.example.toml", "644"],
 ]

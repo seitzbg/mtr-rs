@@ -77,6 +77,20 @@ fn help_overlay_prompt_and_too_small() {
     insta::assert_snapshot!("too_small_50x10", render(&f, 50, 10));
 }
 
+/// The reserved `[PAUSED]` marker at the default terminal width: it and the clock both show.
+#[test]
+fn paused_header_at_the_default_width() {
+    let mut f = snapshot_fixture(false);
+    f.engine
+        .handle(mtr_core::Event::Action(mtr_core::UserAction::Pause), f.now);
+    let screen = render(&f, 80, 24);
+    // TestBackend's Display quotes each row.
+    let header = screen.lines().next().unwrap().trim_matches('"');
+    assert!(header.contains("[PAUSED]"), "{header:?}");
+    assert!(header.ends_with("12:34:56"), "{header:?}");
+    insta::assert_snapshot!("unicode_80x24_paused", screen);
+}
+
 #[test]
 fn ascii_help_overlay() {
     let mut f = snapshot_fixture(true);

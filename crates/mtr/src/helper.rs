@@ -1,4 +1,4 @@
-//! The `mtr-packet` child: search order and spawn (ui/cmdpipe.c:240-372), startup handshake
+//! The `mtr-rs-packet` child: search order and spawn (ui/cmdpipe.c:240-372), startup handshake
 //! (ui/cmdpipe.c:181-220), reply plumbing (ui/cmdpipe.c:690-917) — mtr 0.96, commit 7b01773.
 //! GPL-2.0-only.
 
@@ -12,17 +12,24 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
 
+/// Our privileged probe helper. The C helper, `mtr-packet`, stays a last-resort fallback in
+/// [`candidates_from`] because it speaks the same wire protocol.
+pub const HELPER: &str = "mtr-rs-packet";
+
+/// mtr 0.96's helper: the final fallback when no `mtr-rs-packet` is installed.
+pub const C_HELPER: &str = "mtr-packet";
+
 #[derive(Debug, Error)]
 pub enum HelperError {
-    #[error("mtr-packet not found; tried: {}", .0.join(", "))]
+    #[error("mtr-rs-packet not found; tried: {}", .0.join(", "))]
     NotFound(Vec<String>),
     #[error(
-        "mtr-packet did not answer the startup check; check that it is installed and allowed to open probe sockets"
+        "mtr-rs-packet did not answer the startup check; check that it is installed and allowed to open probe sockets"
     )]
     StartupCheck,
     #[error("{}", unsupported_message(*.0))]
     Unsupported(Feature),
-    #[error("mtr-packet command pipe failure: {0}")]
+    #[error("mtr-rs-packet command pipe failure: {0}")]
     Io(#[from] std::io::Error),
 }
 
@@ -31,8 +38,8 @@ pub enum HelperError {
 /// is missing and how to grant it.
 fn unsupported_message(feature: Feature) -> String {
     match feature {
-        Feature::Mark => "mtr-packet does not support --mark here: grant it cap_net_admin \
-             (sudo setcap cap_net_raw,cap_net_admin+ep \"$(command -v mtr-packet)\")"
+        Feature::Mark => "mtr-rs-packet does not support --mark here: grant it cap_net_admin \
+             (sudo setcap cap_net_raw,cap_net_admin+ep \"$(command -v mtr-rs-packet)\")"
             .to_string(),
         f => format!("Packet type unsupported: {}", f.as_str()),
     }
@@ -68,7 +75,8 @@ pub fn sudo_guard_present() -> bool {
 }
 
 /// `execute_packet_child()`: `$MTR_PACKET` (ignored when `/etc/mtr.is.run.under.sudo` exists),
-/// `mtr-packet` on `PATH`, next to our own executable, `./mtr-packet`.
+/// `mtr-rs-packet` on `PATH`, next to our own executable, `./mtr-rs-packet`, and finally the C
+/// `mtr-packet` on `PATH`.
 pub fn candidates() -> Vec<PathBuf> {
     candidates_from(
         std::env::var_os("MTR_PACKET"),
@@ -80,7 +88,8 @@ pub fn candidates() -> Vec<PathBuf> {
 }
 
 /// Pure core of [`candidates`]: the C search order given an explicit `$MTR_PACKET` value, sudo
-/// guard state and executable directory, without touching the environment or filesystem.
+/// guard state and executable directory, without touching the environment or filesystem. The
+/// C helper (`mtr-packet`) comes last, after every `mtr-rs-packet` location.
 pub fn candidates_from(
     mtr_packet_env: Option<std::ffi::OsString>,
     guard_present: bool,
@@ -92,11 +101,14 @@ pub fn candidates_from(
             v.push(PathBuf::from(p));
         }
     }
-    v.push(PathBuf::from("mtr-packet"));
+    v.push(PathBuf::from(HELPER));
     if let Some(dir) = exe_dir {
-        v.push(dir.join("mtr-packet"));
+        v.push(dir.join(HELPER));
     }
-    v.push(PathBuf::from("./mtr-packet"));
+    v.push(PathBuf::from(format!("./{HELPER}")));
+    // Last resort: mtr 0.96's own helper speaks the identical wire protocol, so a system that
+    // only has the distribution's mtr-packet still works.
+    v.push(PathBuf::from(C_HELPER));
     v
 }
 
@@ -154,7 +166,7 @@ pub async fn spawn_with(
     tokio::spawn(async move {
         while let Some(r) = req_rx.recv().await {
             if let Err(e) = stdin.write_all(r.encode().as_bytes()).await {
-                tracing::error!("mtr-packet command pipe write failure: {e}");
+                tracing::error!("mtr-rs-packet command pipe write failure: {e}");
                 break;
             }
         }
@@ -169,7 +181,7 @@ pub async fn spawn_with(
                         }
                     }
                     // Deviation 9: C dies with "reply parse failure"; we log and go on.
-                    Err(e) => tracing::warn!("unparsable reply from mtr-packet {line:?}: {e}"),
+                    Err(e) => tracing::warn!("unparsable reply from the helper {line:?}: {e}"),
                 },
                 Ok(None) | Err(_) => {
                     let _ = ev_tx.send(HelperEvent::Exited).await;
@@ -209,17 +221,36 @@ async fn check(
     }
 }
 
+/// The two ways to let the helper open probe sockets, for the failures that mean it could not:
+/// the `permission-denied` fatal, the startup check (the helper died opening its sockets) and an
+/// unsupported `ip-4`/`ip-6` (that family's socket never opened). Without `cap_net_raw` the helper
+/// falls back to unprivileged DGRAM ICMP, which the kernel only allows to gids inside
+/// `net.ipv4.ping_group_range` — so `setcap` alone is not the whole story.
+pub fn privilege_hint(err: &str) -> Option<String> {
+    let socket_failure = err == fatal_message(&ResponseKind::PermissionDenied)?
+        || err == HelperError::StartupCheck.to_string()
+        || err == HelperError::Unsupported(Feature::Ip4).to_string()
+        || err == HelperError::Unsupported(Feature::Ip6).to_string();
+    if !socket_failure {
+        return None;
+    }
+    Some(format!(
+        "hint: raw sockets need a capability: sudo setcap cap_net_raw+ep \"$(command -v {HELPER})\"\n\
+         hint: or allow unprivileged ICMP for your group: sudo sysctl -w net.ipv4.ping_group_range=\"0 2147483647\""
+    ))
+}
+
 /// The replies `handle_reply_errors()` (cmdpipe.c:690-728) treats as fatal, with its messages.
 pub fn fatal_message(kind: &ResponseKind) -> Option<&'static str> {
     Some(match kind {
         ResponseKind::ProbesExhausted => "Probes exhausted",
-        ResponseKind::InvalidArgument { .. } => "mtr-packet reported invalid argument",
+        ResponseKind::InvalidArgument { .. } => "mtr-rs-packet reported invalid argument",
         ResponseKind::PermissionDenied => {
-            "mtr-packet reported permission denied while sending a probe"
+            "mtr-rs-packet reported permission denied while sending a probe"
         }
         ResponseKind::AddressInUse => "Address in use",
         ResponseKind::AddressNotAvailable => "Address not available",
-        ResponseKind::UnexpectedError { .. } => "Unexpected mtr-packet error",
+        ResponseKind::UnexpectedError { .. } => "Unexpected mtr-rs-packet error",
         _ => return None,
     })
 }
@@ -287,7 +318,7 @@ mod tests {
     #[tokio::test]
     async fn missing_helper_lists_the_candidates() {
         let err = spawn_with(
-            &[PathBuf::from("/nonexistent/mtr-packet")],
+            &[PathBuf::from("/nonexistent/mtr-rs-packet")],
             false,
             Protocol::Icmp,
             0,
@@ -296,7 +327,7 @@ mod tests {
         .err()
         .unwrap();
         assert!(matches!(err, HelperError::NotFound(_)));
-        assert!(err.to_string().contains("/nonexistent/mtr-packet"));
+        assert!(err.to_string().contains("/nonexistent/mtr-rs-packet"));
     }
 
     #[tokio::test]
@@ -312,60 +343,103 @@ mod tests {
     #[test]
     fn candidate_order_matches_execute_packet_child() {
         let c = candidates();
-        assert_eq!(c.last().unwrap(), &PathBuf::from("./mtr-packet"));
-        assert!(c.iter().any(|p| p == &PathBuf::from("mtr-packet")));
+        assert_eq!(c.last().unwrap(), &PathBuf::from("mtr-packet"));
+        assert!(c.iter().any(|p| p == &PathBuf::from(HELPER)));
     }
 
     #[test]
-    fn candidates_from_env_first_when_guard_absent() {
+    fn candidates_from_full_order_with_env_and_exe_dir() {
         let c = candidates_from(
-            Some(std::ffi::OsString::from("/opt/mtr-packet")),
-            false,
-            None,
-        );
-        assert_eq!(
-            c,
-            vec![
-                PathBuf::from("/opt/mtr-packet"),
-                PathBuf::from("mtr-packet"),
-                PathBuf::from("./mtr-packet"),
-            ]
-        );
-    }
-
-    #[test]
-    fn candidates_from_guard_present_drops_env_and_leads_with_mtr_packet() {
-        let c = candidates_from(
-            Some(std::ffi::OsString::from("/opt/mtr-packet")),
-            true,
-            None,
-        );
-        assert!(!c.contains(&PathBuf::from("/opt/mtr-packet")));
-        assert_eq!(c.first().unwrap(), &PathBuf::from("mtr-packet"));
-    }
-
-    #[test]
-    fn candidates_from_env_unset_leads_with_mtr_packet() {
-        let c = candidates_from(None, false, None);
-        assert_eq!(c.first().unwrap(), &PathBuf::from("mtr-packet"));
-    }
-
-    #[test]
-    fn candidates_from_dot_mtr_packet_is_last() {
-        let c = candidates_from(
-            Some(std::ffi::OsString::from("/opt/mtr-packet")),
+            Some(std::ffi::OsString::from("/opt/mtr-rs-packet")),
             false,
             Some(PathBuf::from("/usr/local/bin")),
         );
         assert_eq!(
             c,
             vec![
-                PathBuf::from("/opt/mtr-packet"),
+                PathBuf::from("/opt/mtr-rs-packet"),
+                PathBuf::from("mtr-rs-packet"),
+                PathBuf::from("/usr/local/bin/mtr-rs-packet"),
+                PathBuf::from("./mtr-rs-packet"),
                 PathBuf::from("mtr-packet"),
-                PathBuf::from("/usr/local/bin/mtr-packet"),
-                PathBuf::from("./mtr-packet"),
             ]
         );
+    }
+
+    #[test]
+    fn candidates_from_guard_present_drops_env_and_leads_with_our_helper() {
+        let c = candidates_from(
+            Some(std::ffi::OsString::from("/opt/mtr-rs-packet")),
+            true,
+            None,
+        );
+        assert!(!c.contains(&PathBuf::from("/opt/mtr-rs-packet")));
+        assert_eq!(c.first().unwrap(), &PathBuf::from("mtr-rs-packet"));
+    }
+
+    #[test]
+    fn candidates_from_env_unset_leads_with_our_helper() {
+        let c = candidates_from(None, false, None);
+        assert_eq!(
+            c,
+            vec![
+                PathBuf::from("mtr-rs-packet"),
+                PathBuf::from("./mtr-rs-packet"),
+                PathBuf::from("mtr-packet"),
+            ]
+        );
+    }
+
+    /// The C helper is the last resort, after every mtr-rs-packet location.
+    #[test]
+    fn the_c_helper_is_the_final_fallback() {
+        let c = candidates_from(None, false, Some(PathBuf::from("/usr/local/bin")));
+        assert_eq!(c.last().unwrap(), &PathBuf::from("mtr-packet"));
+        assert_eq!(
+            c.iter().position(|p| p == &PathBuf::from("mtr-packet")),
+            Some(c.len() - 1)
+        );
+    }
+
+    #[test]
+    fn privilege_hint_names_both_fixes_for_every_socket_failure() {
+        for msg in [
+            fatal_message(&ResponseKind::PermissionDenied)
+                .unwrap()
+                .to_string(),
+            HelperError::StartupCheck.to_string(),
+            HelperError::Unsupported(Feature::Ip4).to_string(),
+            HelperError::Unsupported(Feature::Ip6).to_string(),
+        ] {
+            let hint = privilege_hint(&msg).unwrap_or_else(|| panic!("no hint for {msg:?}"));
+            let lines: Vec<&str> = hint.lines().collect();
+            assert_eq!(lines.len(), 2, "{hint}");
+            assert!(lines[0].contains("setcap cap_net_raw+ep"), "{hint}");
+            assert!(lines[0].contains(HELPER), "{hint}");
+            assert!(
+                lines[1].contains("net.ipv4.ping_group_range=\"0 2147483647\""),
+                "{hint}"
+            );
+            assert!(lines.iter().all(|l| l.starts_with("hint: ")), "{hint}");
+        }
+    }
+
+    #[test]
+    fn privilege_hint_stays_quiet_for_unrelated_failures() {
+        for msg in [
+            fatal_message(&ResponseKind::ProbesExhausted)
+                .unwrap()
+                .to_string(),
+            fatal_message(&ResponseKind::AddressInUse)
+                .unwrap()
+                .to_string(),
+            HelperError::Unsupported(Feature::Sctp).to_string(),
+            HelperError::Unsupported(Feature::Mark).to_string(),
+            "unexpected packet generator exit".to_string(),
+            String::new(),
+        ] {
+            assert_eq!(privilege_hint(&msg), None, "{msg}");
+        }
     }
 
     #[test]
@@ -376,7 +450,7 @@ mod tests {
         );
         assert_eq!(
             fatal_message(&ResponseKind::PermissionDenied),
-            Some("mtr-packet reported permission denied while sending a probe")
+            Some("mtr-rs-packet reported permission denied while sending a probe")
         );
         assert_eq!(fatal_message(&ResponseKind::NoReply), None);
     }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
 # Install (or remove) mtr-rs: both binaries, man pages, completions, and the capability
-# mtr-packet needs for raw sockets.
+# mtr-rs-packet needs for raw sockets.
 #
 #   scripts/install.sh [--prefix DIR] [--no-build] [--no-setcap] [--uninstall]
 #
@@ -28,7 +28,7 @@ while [ $# -gt 0 ]; do
     -h|--help)
       cat <<'EOF'
 Install (or remove) mtr-rs: both binaries, man pages, completions, and the capability
-mtr-packet needs for raw sockets.
+mtr-rs-packet needs for raw sockets.
 
   scripts/install.sh [--prefix DIR] [--no-build] [--no-setcap] [--uninstall]
 
@@ -54,15 +54,41 @@ fishdir=$prefix/share/fish/vendor_completions.d
 
 # Every path this script owns; --uninstall removes exactly these.
 files=(
+  "$bindir/mtr-rs" "$bindir/mtr-rs-packet"
+  "$mandir/mtr-rs.8" "$mandir/mtr-rs-packet.8"
+  "$bashdir/mtr-rs" "$zshdir/_mtr-rs" "$fishdir/mtr-rs.fish"
+)
+
+# What this script installed before 0.2 renamed everything to mtr-rs. An upgrade or an
+# uninstall has to clear these too, or a 0.1.x install stays on the system for ever.
+legacy_files=(
   "$bindir/mtr" "$bindir/mtr-packet"
   "$mandir/mtr.8" "$mandir/mtr-packet.8"
   "$bashdir/mtr" "$zshdir/_mtr" "$fishdir/mtr.fish"
 )
 
+# ...but only once "$bindir/mtr" is provably ours. With --prefix /usr that path is the
+# distribution's C mtr, and deleting it would break the system. 0.1.x is the only release this
+# project ever shipped under the name and the C client reports 0.9x, so the version line settles
+# it; no mtr there at all means there is nothing to clean up.
+remove_legacy() {
+  local version f
+  [ -e "$bindir/mtr" ] || return 0
+  version=$("$bindir/mtr" --version 2>/dev/null | head -n 1) || version=
+  case "$version" in
+    "mtr 0.1."*) ;;
+    *) echo "left $bindir/mtr alone: not a 0.1.x install of this project"; return 0 ;;
+  esac
+  for f in "${legacy_files[@]}"; do
+    if [ -e "$f" ]; then rm -f "$f"; echo "removed $f (pre-0.2 install)"; fi
+  done
+}
+
 if [ "$uninstall" = 1 ]; then
   for f in "${files[@]}"; do
     if [ -e "$f" ]; then rm -f "$f"; echo "removed $f"; fi
   done
+  remove_legacy
   exit 0
 fi
 
@@ -70,15 +96,15 @@ fi
 # otherwise. Under --no-build we must not invoke cargo at all -- that is the whole point of
 # the flag (the caller is typically root, and building as root would poison ./target).
 assets=(
-  "$root/target/dist/man/mtr.8" "$root/target/dist/man/mtr-packet.8"
-  "$root/target/dist/completions/mtr.bash" "$root/target/dist/completions/_mtr"
-  "$root/target/dist/completions/mtr.fish"
+  "$root/target/dist/man/mtr-rs.8" "$root/target/dist/man/mtr-rs-packet.8"
+  "$root/target/dist/completions/mtr-rs.bash" "$root/target/dist/completions/_mtr-rs"
+  "$root/target/dist/completions/mtr-rs.fish"
 )
 
 if [ "$build" = 1 ]; then
   (cd "$root" && cargo build --release --workspace)
 fi
-for bin in mtr mtr-packet; do
+for bin in mtr-rs mtr-rs-packet; do
   [ -x "$root/target/release/$bin" ] || { echo "install.sh: missing $root/target/release/$bin (run without --no-build, or build first: cargo build --release --workspace)" >&2; exit 1; }
 done
 if [ "$build" = 1 ]; then
@@ -89,25 +115,28 @@ else
   done
 fi
 
+# Upgrading from 0.1.x: clear the old names before writing the new ones.
+remove_legacy
+
 install -d "$bindir" "$mandir" "$bashdir" "$zshdir" "$fishdir"
-install -m 755 "$root/target/release/mtr" "$bindir/mtr"
-install -m 755 "$root/target/release/mtr-packet" "$bindir/mtr-packet"
-install -m 644 "$root/target/dist/man/mtr.8" "$mandir/mtr.8"
-install -m 644 "$root/target/dist/man/mtr-packet.8" "$mandir/mtr-packet.8"
-install -m 644 "$root/target/dist/completions/mtr.bash" "$bashdir/mtr"
-install -m 644 "$root/target/dist/completions/_mtr" "$zshdir/_mtr"
-install -m 644 "$root/target/dist/completions/mtr.fish" "$fishdir/mtr.fish"
+install -m 755 "$root/target/release/mtr-rs" "$bindir/mtr-rs"
+install -m 755 "$root/target/release/mtr-rs-packet" "$bindir/mtr-rs-packet"
+install -m 644 "$root/target/dist/man/mtr-rs.8" "$mandir/mtr-rs.8"
+install -m 644 "$root/target/dist/man/mtr-rs-packet.8" "$mandir/mtr-rs-packet.8"
+install -m 644 "$root/target/dist/completions/mtr-rs.bash" "$bashdir/mtr-rs"
+install -m 644 "$root/target/dist/completions/_mtr-rs" "$zshdir/_mtr-rs"
+install -m 644 "$root/target/dist/completions/mtr-rs.fish" "$fishdir/mtr-rs.fish"
 for f in "${files[@]}"; do echo "installed $f"; done
 
 if [ "$setcap" = 1 ]; then
-  if command -v setcap >/dev/null 2>&1 && setcap cap_net_raw+ep "$bindir/mtr-packet"; then
-    echo "granted cap_net_raw to $bindir/mtr-packet"
+  if command -v setcap >/dev/null 2>&1 && setcap cap_net_raw+ep "$bindir/mtr-rs-packet"; then
+    echo "granted cap_net_raw to $bindir/mtr-rs-packet"
   else
     cat >&2 <<EOF
 install.sh: could not grant cap_net_raw (see any setcap error above; usually a missing setcap
-or not root). mtr-packet still works on
+or not root). mtr-rs-packet still works on
 its unprivileged fallback; for raw sockets (MPLS labels, TCP/SCTP hop discovery) run:
-    sudo setcap cap_net_raw+ep $bindir/mtr-packet
+    sudo setcap cap_net_raw+ep $bindir/mtr-rs-packet
 EOF
   fi
 fi

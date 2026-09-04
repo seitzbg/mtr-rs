@@ -1,14 +1,14 @@
 .\" GPL-2.0-only
 .\" mtr-rs: man page for the privileged probe helper.
-.TH MTR-PACKET 8 "2026-09-04" "mtr-rs" "System Administration"
+.TH MTR-RS-PACKET 8 "2026-09-04" "mtr-rs" "System Administration"
 .SH NAME
-mtr-packet \- send network probes for mtr and report the replies
+mtr-rs-packet \- send network probes for mtr-rs and report the replies
 .SH SYNOPSIS
-.B mtr-packet
+.B mtr-rs-packet
 .SH DESCRIPTION
-.B mtr-packet
+.B mtr-rs-packet
 is the privileged half of
-.BR mtr (8).
+.BR mtr-rs (8).
 It is started by the unprivileged client, reads one command per line on
 standard input and writes one reply per line on standard output. It opens
 its raw sockets first, drops every privilege (setgid, setuid, and all
@@ -59,9 +59,9 @@ and an overlong one
 Raw sockets need
 .B CAP_NET_RAW
 (install with
-.BR "setcap cap_net_raw+ep /usr/bin/mtr-packet" ).
+.BR "setcap cap_net_raw+ep /usr/bin/mtr-rs-packet" ).
 Without it
-.B mtr-packet
+.B mtr-rs-packet
 falls back to unprivileged ICMP and UDP datagram sockets with
 .BR IP_RECVERR ;
 echo replies and time-exceeded errors are still reported, but MPLS labels
@@ -73,17 +73,17 @@ The privilege drop keeps
 and only that, when it was actually granted, because
 .B SO_MARK
 is set per probe after the drop:
-.BR mtr (8)'s
+.BR mtr-rs (8)'s
 .B \-M
 .RB ( \-\-mark )
 therefore needs
 .B cap_net_admin
 on
-.B mtr-packet
+.B mtr-rs-packet
 and root (or
 .BR cap_net_admin )
 for the client's own route lookup. Grant both with
-.BR "setcap cap_net_raw,cap_net_admin+ep /usr/bin/mtr-packet" .
+.BR "setcap cap_net_raw,cap_net_admin+ep /usr/bin/mtr-rs-packet" .
 .B "check\-support feature mark"
 answers
 .B ok
@@ -98,14 +98,14 @@ and because the drop happens before the first command is read, a helper that
 started with it keeps it for the whole run, on every run and not only when
 .B \-M
 is used; the same holds under
-.BR "sudo mtr" .
+.BR "sudo mtr-rs" .
 Grant it only if you use
 .BR \-M .
 .SH FILES
 .TP
 .I /etc/mtr.is.run.under.sudo
 When present, the
-.BR mtr (8)
+.BR mtr-rs (8)
 client ignores
 .B $MTR_PACKET
 and
@@ -115,13 +115,13 @@ refuses
 and does not read the default user configuration file.  These are the
 environment- or argument-controlled paths that the client can otherwise
 execute, read, or create.  The marker therefore prevents a sudoers rule permitting
-.B mtr
+.B mtr-rs
 from being used for arbitrary path access; it does not drop the client's root
 privileges or restrict which network targets and probe options the caller may
 select.  The sudo policy should still sanitise the environment and grant only
 the intended command line.
 .SH SEE ALSO
-.BR mtr (8)
+.BR mtr-rs (8)
 .SH AUTHORS
 mtr-rs is a Rust port of mtr by Matt Kimball, Roger Wolff and others; the
 protocol and behaviour follow mtr 0.96.

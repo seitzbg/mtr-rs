@@ -8,6 +8,26 @@ All notable changes to mtr-rs are documented here. The format follows
 
 Nothing yet.
 
+## [0.2.0] - 2026-09-04
+
+### Added
+- The client explains both fixes when the helper cannot open sockets: `setcap cap_net_raw` or widening `net.ipv4.ping_group_range`.
+
+### Changed
+- The TUI header reserves room for the `[PAUSED]` marker next to the clock, so it stays visible at 80 columns; the header's left part is truncated instead.
+- CI gates on the upstream `probe.py` suite (IPv4) instead of only reporting it.
+- Installed binaries are now `mtr-rs` and `mtr-rs-packet` (man pages, completions and setcap hints follow); the Debian package installs alongside the distribution's mtr and no longer declares Conflicts/Provides/Replaces on `mtr`/`mtr-tiny`. The client looks for `mtr-rs-packet` first and still falls back to a C `mtr-packet` on the path.
+- `--version`, the TUI header and error messages say `mtr-rs`; CSV and JSON output keep the C names.
+- `--init-config` writes the effective options (defaults, `MTR_OPTIONS`, command line) instead of only the defaults; a key you changed is written uncommented, the rest stay commented out at their default, and options that would not load or run again (`-o LSQ`, or `-i 0.5` as a non-root user) are refused instead of written.
+- `scripts/install.sh` removes a pre-0.2 install of this project's `mtr`/`mtr-packet` files on upgrade or uninstall, after checking the binary is ours.
+
+### Fixed
+- Each target name is resolved once; the same-family check reuses the addresses it looked up.
+- `--init-config` saves the clamped `max_ttl` that is actually in effect.
+
+### Security
+- CI actions moved to their current majors; fuzz targets run for 20 s each on pull requests that touch the parsers.
+
 ## [0.1.0] - 2026-09-04
 
 First release of the Rust port of mtr 0.96 (upstream commit 7b01773).
@@ -45,5 +65,6 @@ First release of the Rust port of mtr 0.96 (upstream commit 7b01773).
 - `MTR_RS_LOG` is ignored when `/etc/mtr.is.run.under.sudo` exists and never truncates or follows an existing file (CR-01).
 - GitHub Actions pinned to commit SHAs, read-only tokens except the release publish step, and cargo-deny in CI (CR-07).
 
-[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/seitzbg/mtr-rs/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/seitzbg/mtr-rs/releases/tag/v0.1.0

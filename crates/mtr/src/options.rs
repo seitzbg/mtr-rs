@@ -20,7 +20,8 @@ pub fn split_mtr_options(input: &str) -> Result<Vec<String>, String> {
         }
         if words.len() >= MAX_ENV_ARGS {
             eprintln!(
-                "mtr: Warning: extra arguments ignored: {}",
+                "{}: Warning: extra arguments ignored: {}",
+                crate::cli::PROGRAM,
                 chars.collect::<String>()
             );
             break;
