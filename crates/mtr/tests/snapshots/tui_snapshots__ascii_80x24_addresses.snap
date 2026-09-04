@@ -25,4 +25,4 @@ expression: addresses
 "|                                                                              |"
 "|                                                                              |"
 "+------------------------------------------------------------------------------+"
-"q quit  ? help  p pause  Space resume  r reset  Enter pane  Tab tab             "
+"q quit  ? help  p pause  Space resume  r reset  n dns  z asn  e mpls  Enter pane"

@@ -8,13 +8,14 @@ use crate::tui::render::View;
 use crate::tui::state::{Prompt, PromptKind, UiState};
 use crate::width::{display_width, truncate_to};
 
-/// Hints most-useful-first: the full line is ~100 cells, so at 80 columns the tail is dropped and
-/// whatever survives has to be enough to reach everything else — `q quit` and `? help` lead.
+/// Hints most-useful-first: the full line is 110 cells, so at 80 columns the tail is dropped and
+/// whatever survives has to be enough to reach everything else — `q quit` and `? help` lead, and
+/// the `n`/`z`/`e` toggles sit before `Enter pane`, the last hint that still fits at 80.
 pub fn hints(ui: &UiState) -> String {
     if ui.help {
         return "any key closes help".to_string();
     }
-    "q quit  ? help  p pause  Space resume  r reset  Enter pane  Tab tab  ↑↓ select  d recent  n dns  z asn  e mpls".to_string()
+    "q quit  ? help  p pause  Space resume  r reset  n dns  z asn  e mpls  Enter pane  Tab tab  ↑↓ select  d recent".to_string()
 }
 
 /// Drop whole hints (never half a word) until the line fits `width` display cells.
@@ -128,6 +129,19 @@ mod tests {
             }),
             "any key closes help"
         );
+    }
+
+    #[test]
+    fn the_toggles_survive_an_80_column_footer() {
+        let cut = fit_hints(&hints(&UiState::new()), 80);
+        for h in [
+            "n dns", "z asn", "e mpls", "q quit", "? help", "p pause", "r reset",
+        ] {
+            assert!(
+                cut.split("  ").any(|x| x == h),
+                "{h:?} missing from {cut:?}"
+            );
+        }
     }
 
     #[test]

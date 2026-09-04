@@ -80,9 +80,13 @@ pub struct Parsed {
     pub mpls: Vec<MplsLabel>,
 }
 
-/// Network-order 16-bit read. Callers must have bounds-checked `at + 2 <= b.len()`.
-fn be16(b: &[u8], at: usize) -> u16 {
-    u16::from_be_bytes([b[at], b[at + 1]])
+/// Network-order 16-bit read; `None` when `at + 2 > b.len()`, so a caller can never index past
+/// the end even if its own length check is wrong.
+fn be16(b: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_be_bytes([
+        *b.get(at)?,
+        *b.get(at.checked_add(1)?)?,
+    ]))
 }
 
 /// `decode_mpls_labels()` (deconstruct_unix.c:337-394) plus `decode_mpls_object()` (:299-331).
@@ -97,7 +101,8 @@ pub fn decode_mpls(icmp: &[u8]) -> Vec<MplsLabel> {
     // deconstruct_unix.c:371-393: walk the object chain looking for the MPLS object.
     let mut objs = &icmp[ext_at + ICMP_EXT_HEADER..];
     while objs.len() >= ICMP_EXT_OBJECT {
-        let len = usize::from(be16(objs, 0));
+        let Some(len) = be16(objs, 0) else { break };
+        let len = usize::from(len);
         if len > objs.len() || len < ICMP_EXT_OBJECT {
             return Vec::new();
         }
@@ -152,18 +157,18 @@ fn inner6(ip: &[u8]) -> Option<Inner> {
 fn inner_transport(proto: u8, src: IpAddr, dst: IpAddr, t: &[u8]) -> Option<Inner> {
     match proto {
         IPPROTO_ICMP | IPPROTO_ICMPV6 if t.len() >= ICMP_HEADER => Some(Inner::Icmp {
-            id: be16(t, 4),
-            sequence: be16(t, 6),
+            id: be16(t, 4)?,
+            sequence: be16(t, 6)?,
         }),
         IPPROTO_UDP if t.len() >= UDP_HEADER => Some(Inner::Udp {
             src,
             dst,
-            src_port: be16(t, 0),
-            dst_port: be16(t, 2),
-            checksum: be16(t, 6),
+            src_port: be16(t, 0)?,
+            dst_port: be16(t, 2)?,
+            checksum: be16(t, 6)?,
         }),
         IPPROTO_TCP | IPPROTO_SCTP if t.len() >= STREAM_HEADER => Some(Inner::Stream {
-            src_port: be16(t, 0),
+            src_port: be16(t, 0)?,
         }),
         _ => None,
     }
@@ -187,7 +192,7 @@ fn parse_icmp(icmp: &[u8], version: u8) -> Option<Parsed> {
         t if t == echo_t => {
             return Some(Parsed {
                 kind: IcmpKind::EchoReply,
-                echo: Some((be16(icmp, 4), be16(icmp, 6))),
+                echo: Some((be16(icmp, 4)?, be16(icmp, 6)?)),
                 inner: None,
                 mpls,
             });
@@ -343,6 +348,13 @@ mod tests {
         v.extend_from_slice(&csum.to_be_bytes());
         v.extend_from_slice(&[0; 4]);
         v
+    }
+
+    #[test]
+    fn be16_is_none_past_the_end() {
+        assert_eq!(be16(&[1, 2, 3], 1), Some(0x0203));
+        assert_eq!(be16(&[1, 2, 3], 2), None);
+        assert_eq!(be16(&[], 0), None);
     }
 
     #[test]
