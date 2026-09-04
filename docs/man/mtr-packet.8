@@ -108,11 +108,18 @@ When present, the
 .BR mtr (8)
 client ignores
 .B $MTR_PACKET
-and refuses
-.BR \-F " and " \-\-config ,
-so that a sudoers rule permitting
+and
+.BR $MTR_RS_LOG ,
+refuses
+.BR \-F ", " \-\-config " and " \-\-init-config ,
+and does not read the default user configuration file.  These are the
+environment- or argument-controlled paths that the client can otherwise
+execute, read, or create.  The marker therefore prevents a sudoers rule permitting
 .B mtr
-cannot be used to read or execute arbitrary paths.
+from being used for arbitrary path access; it does not drop the client's root
+privileges or restrict which network targets and probe options the caller may
+select.  The sudo policy should still sanitise the environment and grant only
+the intended command line.
 .SH SEE ALSO
 .BR mtr (8)
 .SH AUTHORS

@@ -8,7 +8,8 @@ Status: **Plans A–D complete** — the interactive TUI is the default, `mtr -r
 the classic reports, and the Rust `mtr-packet` helper ships alongside them. Either helper works:
 `$MTR_PACKET` overrides the search path, so the client can drive our helper or the installed C one,
 and the C client can drive ours. Packaged: release tarballs and a Debian package, generated man
-pages and completions, and scripts/install.sh.
+pages and completions, and scripts/install.sh. Linux only: the helper is built on Linux sockets and the
+macOS backend is a stub (`ROADMAP.md`).
 
 ## Installation
 
