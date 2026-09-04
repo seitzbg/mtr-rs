@@ -152,10 +152,10 @@ fn parse_rtt_thresholds_ms(v: Option<&[i64]>) -> Result<Option<RttThresholds>, S
     let Some(v) = v else {
         return Ok(None);
     };
-    if v.iter().any(|&n| n < 0) {
-        return Err("rtt thresholds must be positive".to_string());
-    }
-    let ms: Vec<u64> = v.iter().map(|&n| n as u64).collect();
+    let ms: Vec<u64> = v
+        .iter()
+        .map(|&n| crate::cli::rtt_threshold_ms(n))
+        .collect::<Result<_, _>>()?;
     RttThresholds::from_millis(&ms).map(Some)
 }
 

@@ -128,16 +128,27 @@ pub fn split_target_port(name: &str) -> Result<Target, String> {
     })
 }
 
+/// Upper bound for one RTT colour threshold: a day in milliseconds. Anything larger is a typo,
+/// and the value has to survive the conversion to microseconds downstream.
+pub const MAX_RTT_THRESHOLD_MS: u64 = 86_400_000;
+
+/// One `--rtt-thresholds` / `rtt_thresholds_ms` entry, checked instead of cast.
+pub fn rtt_threshold_ms(n: i64) -> Result<u64, String> {
+    u64::try_from(n)
+        .ok()
+        .filter(|&ms| ms <= MAX_RTT_THRESHOLD_MS)
+        .ok_or_else(|| {
+            format!("rtt-thresholds values must be between 0 and {MAX_RTT_THRESHOLD_MS} ms")
+        })
+}
+
 /// `--rtt-thresholds 30,100,200,500`: the four millisecond bounds of the RTT colour ramp.
 pub fn parse_rtt_thresholds(spec: &str) -> Result<RttThresholds, String> {
     let mut ms = Vec::new();
     for item in spec.split(',') {
         let n = parse_c_long(item.trim())
             .map_err(|_| format!("invalid rtt threshold '{}' in '{spec}'", item.trim()))?;
-        if n < 0 {
-            return Err("rtt thresholds must be positive".to_string());
-        }
-        ms.push(n as u64);
+        ms.push(rtt_threshold_ms(n)?);
     }
     RttThresholds::from_millis(&ms)
 }
@@ -468,12 +479,22 @@ impl Args {
             return Err("non-root users cannot request an interval < 1.0 seconds".to_string());
         }
         validate_seconds("grace time", self.gracetime)?;
-        if self.cache.is_some_and(|c| c <= 0) {
-            return Err("cache timeout must be positive".to_string());
-        }
-        if self.timeout < 1 {
-            return Err("timeout must be positive".to_string());
-        }
+        // mtr.c:783-788 errors on <= 0 with this text; the upper bound is ours (C stores an int).
+        let cache_timeout = match self.cache {
+            None => None,
+            Some(c) if c <= 0 => return Err("cache timeout must be positive".to_string()),
+            Some(c) => Some(
+                u64::try_from(c)
+                    .ok()
+                    .filter(|&c| c <= i32::MAX as u64)
+                    .ok_or("cache timeout must be between 1 and 2147483647".to_string())?,
+            ),
+        };
+        // C (mtr.c:846-849) stores -Z in an int and multiplies by 1e6 without any check.
+        let probe_timeout = match self.timeout {
+            t if (1..=i64::from(i32::MAX)).contains(&t) => t as u64,
+            _ => return Err("timeout must be between 1 and 2147483647".to_string()),
+        };
         let first_ttl = self.first_ttl.max(1);
         let max_ttl = self.max_ttl.clamp(1, 255);
         let due_ttl = match self.due_ttl {
@@ -496,7 +517,12 @@ impl Args {
                 "dueTTL({due_ttl}) cannot be larger than maxTTL({max_ttl})."
             ));
         }
-        let max_unknown = self.max_unknown.max(1);
+        // C (mtr.c:742-747) silently clamps maxUnknown < 1 to 1 and has no upper bound; rejecting
+        // is clearer and keeps the value inside the u32 the engine holds.
+        let max_unknown = match self.max_unknown {
+            u if (1..=i64::from(i32::MAX)).contains(&u) => u as u32,
+            _ => return Err("max unknown must be between 1 and 2147483647".to_string()),
+        };
         let max_display_path = self.max_display_path.clamp(0, 128);
         let mut remote_port = match self.port {
             None => 0,
@@ -548,24 +574,42 @@ impl Args {
                 port: 0,
             });
         }
+        // C (mtr.c:876-878) parses -M with strtoulong_or_err into a uint32_t: a value above
+        // 2^32-1 wraps silently. Reject it instead.
+        let mark = match self.mark {
+            None => 0,
+            Some(m) => u32::try_from(m).map_err(|_| "mark must be between 0 and 4294967295")?,
+        };
+        // C (mtr.c:678-681) parses -c into an int MaxPing with no range check; 0 keeps C's
+        // "run forever in interactive mode" meaning.
+        let max_ping = match self.report_cycles {
+            None => 10,
+            Some(c) if (0..=i64::from(i32::MAX)).contains(&c) => c as u32,
+            Some(_) => return Err("report cycles must be between 0 and 2147483647".to_string()),
+        };
         let config = Config {
             protocol,
             interval: self.interval,
-            max_ping: self.report_cycles.map(|c| c.max(0) as u32).unwrap_or(10),
+            max_ping,
             interactive: mode == OutputMode::Tui,
             force_max_ping: self.report_cycles.is_some(),
+            // packet_size_in_range() above bounds |psize| by MAX_PACKET.
             packet_size: self.psize as i32,
+            // The -1..=255 check above.
             bit_pattern: self.bitpattern as i32,
+            // The 0..=255 check above.
             tos: self.tos as u8,
-            mark: self.mark.map(|m| m as u32).unwrap_or(0),
+            mark,
+            // first_ttl/max_ttl/due_ttl are clamped to 1..=255 (0..=255 for due_ttl) above.
             first_ttl: first_ttl as u8,
             max_ttl: max_ttl as u8,
             due_ttl: due_ttl as u8,
-            max_unknown: max_unknown as u32,
+            max_unknown,
+            // Clamped to 0..=128 above.
             max_display_path: max_display_path as usize,
-            probe_timeout: Duration::from_secs(self.timeout as u64),
+            probe_timeout: Duration::from_secs(probe_timeout),
             grace_time: self.gracetime,
-            cache_timeout: self.cache.map(|c| Duration::from_secs(c as u64)),
+            cache_timeout: cache_timeout.map(Duration::from_secs),
             remote_port,
             local_port,
             interface: self.interface.clone(),
@@ -870,7 +914,7 @@ mod tests {
         );
         assert_eq!(
             opts(&["-Z", "0", "h"]).unwrap_err(),
-            "timeout must be positive"
+            "timeout must be between 1 and 2147483647"
         );
         assert_eq!(
             opts(&["-D", "0", "h"]).unwrap_err(),
@@ -888,7 +932,11 @@ mod tests {
             opts(&["-m", "4", "-D", "9", "h"]).unwrap_err(),
             "dueTTL(9) cannot be larger than maxTTL(4)."
         );
-        let o = opts(&["-f", "0", "-m", "999", "-U", "0", "-E", "500", "h"]).unwrap();
+        assert_eq!(
+            opts(&["-U", "0", "h"]).unwrap_err(),
+            "max unknown must be between 1 and 2147483647"
+        );
+        let o = opts(&["-f", "0", "-m", "999", "-U", "1", "-E", "500", "h"]).unwrap();
         assert_eq!(
             (
                 o.config.first_ttl,
@@ -1019,9 +1067,71 @@ mod tests {
         );
         assert_eq!(
             parse_rtt_thresholds("5,-10,20,40"),
-            Err("rtt thresholds must be positive".to_string())
+            Err("rtt-thresholds values must be between 0 and 86400000 ms".to_string())
+        );
+        assert_eq!(
+            parse_rtt_thresholds("5,10,20,86400001"),
+            Err("rtt-thresholds values must be between 0 and 86400000 ms".to_string())
         );
         assert!(Args::try_parse_from(["mtr", "--rtt-thresholds", "5,4,3,2", "h"]).is_err());
+    }
+
+    #[test]
+    fn out_of_range_integers_are_errors_not_wraps() {
+        let cases = [
+            // `-M -1` would be an unknown flag to clap; the attached form reaches the check.
+            (
+                &["--mark=-1", "h"][..],
+                "mark must be between 0 and 4294967295",
+            ),
+            (
+                &["-M", "4294967296", "h"],
+                "mark must be between 0 and 4294967295",
+            ),
+            (
+                &["--report-cycles=-5", "h"],
+                "report cycles must be between 0 and 2147483647",
+            ),
+            (
+                &["-c", "2147483648", "h"],
+                "report cycles must be between 0 and 2147483647",
+            ),
+            (
+                &["-U", "0", "h"],
+                "max unknown must be between 1 and 2147483647",
+            ),
+            (
+                &["-U", "2147483648", "h"],
+                "max unknown must be between 1 and 2147483647",
+            ),
+            (
+                &["-Z", "2147483648", "h"],
+                "timeout must be between 1 and 2147483647",
+            ),
+            (
+                &["-Z", "0", "h"],
+                "timeout must be between 1 and 2147483647",
+            ),
+            (
+                &["--cache", "2147483648", "h"],
+                "cache timeout must be between 1 and 2147483647",
+            ),
+            // C's own message for --cache <= 0 (mtr.c:785-787) is kept.
+            (&["--cache", "0", "h"], "cache timeout must be positive"),
+        ];
+        for (argv, msg) in cases {
+            let err = parse(argv).into_options(true).unwrap_err();
+            assert_eq!(err, msg, "{argv:?}");
+        }
+        let o = parse(&["-M", "4294967295", "h"])
+            .into_options(true)
+            .unwrap();
+        assert_eq!(o.config.mark, u32::MAX);
+        let o = parse(&["-c", "0", "-U", "1", "h"])
+            .into_options(true)
+            .unwrap();
+        assert_eq!((o.config.max_ping, o.config.max_unknown), (0, 1));
+        assert!(o.config.force_max_ping);
     }
 
     #[test]
