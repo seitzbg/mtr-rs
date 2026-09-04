@@ -23,6 +23,16 @@ jobs:
       - run: cargo test --workspace
         env:
           INSTA_UPDATE: "no"
+      - name: Packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcap2-bin dpkg-dev
+          cargo install cargo-deb --locked
+      - run: cargo build --release --workspace
+      - name: install.sh round-trip
+        run: scripts/tests/install-roundtrip.sh
+      - name: Build and check the .deb
+        run: scripts/check-deb.sh
 
   # The upstream Python helper suites (test/{cmdparse,param,probe}.py from the C repo)
   # run against our helper. GitHub runners have no installed C `mtr-packet`, so the
