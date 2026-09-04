@@ -248,11 +248,12 @@ pub struct Args {
         short = 'i',
         long = "interval",
         value_name = "SECONDS",
-        default_value_t = 1.0
+        default_value_t = 1.0,
+        allow_negative_numbers = true
     )]
     pub interval: f64,
     /// Number of probe cycles
-    #[arg(short = 'c', long = "report-cycles", value_name = "COUNT", value_parser = parse_c_long)]
+    #[arg(short = 'c', long = "report-cycles", value_name = "COUNT", value_parser = parse_c_long, allow_negative_numbers = true)]
     pub report_cycles: Option<i64>,
     /// Packet size (negative: random up to the absolute value)
     #[arg(
@@ -294,19 +295,19 @@ pub struct Args {
     #[arg(short = 'a', long = "address", value_name = "ADDRESS")]
     pub address: Option<String>,
     /// First TTL to probe
-    #[arg(short = 'f', long = "first-ttl", value_name = "NUM", value_parser = parse_c_long, default_value = "1")]
+    #[arg(short = 'f', long = "first-ttl", value_name = "NUM", value_parser = parse_c_long, default_value = "1", allow_negative_numbers = true)]
     pub first_ttl: i64,
     /// Maximum number of hops
-    #[arg(short = 'm', long = "max-ttl", value_name = "NUM", value_parser = parse_c_long, default_value = "30")]
+    #[arg(short = 'm', long = "max-ttl", value_name = "NUM", value_parser = parse_c_long, default_value = "30", allow_negative_numbers = true)]
     pub max_ttl: i64,
     /// TTL that must be reached before a cycle ends
-    #[arg(short = 'D', long = "due-ttl", value_name = "NUM", value_parser = parse_c_long)]
+    #[arg(short = 'D', long = "due-ttl", value_name = "NUM", value_parser = parse_c_long, allow_negative_numbers = true)]
     pub due_ttl: Option<i64>,
     /// Maximum unknown hops
-    #[arg(short = 'U', long = "max-unknown", value_name = "NUM", value_parser = parse_c_long, default_value = "12")]
+    #[arg(short = 'U', long = "max-unknown", value_name = "NUM", value_parser = parse_c_long, default_value = "12", allow_negative_numbers = true)]
     pub max_unknown: i64,
     /// Maximum ECMP paths shown per hop
-    #[arg(short = 'E', long = "max-display-path", value_name = "NUM", value_parser = parse_c_long, default_value = "8")]
+    #[arg(short = 'E', long = "max-display-path", value_name = "NUM", value_parser = parse_c_long, default_value = "8", allow_negative_numbers = true)]
     pub max_display_path: i64,
     /// Use UDP instead of ICMP echo
     #[arg(short = 'u', long = "udp")]
@@ -318,27 +319,28 @@ pub struct Args {
     #[arg(short = 'S', long = "sctp")]
     pub sctp: bool,
     /// Target port for TCP, SCTP or UDP
-    #[arg(short = 'P', long = "port", value_name = "PORT", value_parser = parse_c_long)]
+    #[arg(short = 'P', long = "port", value_name = "PORT", value_parser = parse_c_long, allow_negative_numbers = true)]
     pub port: Option<i64>,
     /// Source port for UDP
-    #[arg(short = 'L', long = "localport", value_name = "PORT", value_parser = parse_c_long)]
+    #[arg(short = 'L', long = "localport", value_name = "PORT", value_parser = parse_c_long, allow_negative_numbers = true)]
     pub localport: Option<i64>,
     /// Seconds to keep probe sockets open
-    #[arg(short = 'Z', long = "timeout", value_name = "SECONDS", value_parser = parse_c_long, default_value = "10")]
+    #[arg(short = 'Z', long = "timeout", value_name = "SECONDS", value_parser = parse_c_long, default_value = "10", allow_negative_numbers = true)]
     pub timeout: i64,
     /// Seconds to wait for late replies after the last cycle
     #[arg(
         short = 'G',
         long = "gracetime",
         value_name = "SECONDS",
-        default_value_t = 5.0
+        default_value_t = 5.0,
+        allow_negative_numbers = true
     )]
     pub gracetime: f64,
     /// Skip hops that answered within SECONDS
-    #[arg(long = "cache", value_name = "SECONDS", value_parser = parse_c_long)]
+    #[arg(long = "cache", value_name = "SECONDS", value_parser = parse_c_long, allow_negative_numbers = true)]
     pub cache: Option<i64>,
     /// Mark each sent packet (SO_MARK)
-    #[arg(short = 'M', long = "mark", value_name = "MARK", value_parser = parse_c_long)]
+    #[arg(short = 'M', long = "mark", value_name = "MARK", value_parser = parse_c_long, allow_negative_numbers = true)]
     pub mark: Option<i64>,
     /// Use ASCII glyphs and borders in the TUI
     #[arg(long = "ascii")]
@@ -1079,7 +1081,8 @@ mod tests {
     #[test]
     fn out_of_range_integers_are_errors_not_wraps() {
         let cases = [
-            // `-M -1` would be an unknown flag to clap; the attached form reaches the check.
+            // Both the attached and the separated form reach the range check; see
+            // `separated_negative_values_reach_the_range_checks` for the `-M -1` spelling.
             (
                 &["--mark=-1", "h"][..],
                 "mark must be between 0 and 4294967295",
@@ -1132,6 +1135,44 @@ mod tests {
             .unwrap();
         assert_eq!((o.config.max_ping, o.config.max_unknown), (0, 1));
         assert!(o.config.force_max_ping);
+    }
+
+    /// C's getopt(3) takes the option argument of `-M -1` verbatim, so the value has to reach
+    /// our range check rather than be read as an unknown flag: every numeric option is declared
+    /// `allow_negative_numbers`. A host name cannot start with `-`, so the positional argument
+    /// is unaffected.
+    #[test]
+    fn separated_negative_values_reach_the_range_checks() {
+        let cases = [
+            (
+                &["-M", "-1", "h"][..],
+                "mark must be between 0 and 4294967295",
+            ),
+            (
+                &["-c", "-1", "h"],
+                "report cycles must be between 0 and 2147483647",
+            ),
+            (
+                &["-U", "-1", "h"],
+                "max unknown must be between 1 and 2147483647",
+            ),
+            (
+                &["-Z", "-1", "h"],
+                "timeout must be between 1 and 2147483647",
+            ),
+            (&["--cache", "-1", "h"], "cache timeout must be positive"),
+            (&["-i", "-1", "h"], "wait time must be positive"),
+            (&["-G", "-1", "h"], "grace time must be positive"),
+        ];
+        for (argv, msg) in cases {
+            let err = parse(argv).into_options(true).unwrap_err();
+            assert_eq!(err, msg, "{argv:?}");
+        }
+        // The host after a negative value is still parsed as the target.
+        let o = parse(&["-c", "-0", "example.com"])
+            .into_options(true)
+            .unwrap();
+        assert_eq!(o.targets[0].name, "example.com");
     }
 
     #[test]

@@ -86,7 +86,7 @@ enum TargetOutcome {
     Interrupted(Option<String>),
 }
 
-/// ui/mtr.c:1272-1273: the interactive display runs the first target and stops.
+/// ui/mtr.c:1275-1276: the interactive display runs the first target and stops.
 fn targets_to_run(mode: OutputMode, targets: &[Target]) -> &[Target] {
     if mode == OutputMode::Tui {
         &targets[..targets.len().min(1)]

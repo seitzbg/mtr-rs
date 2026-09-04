@@ -193,6 +193,21 @@ In `cargo test` only
 `cmdparse.py TestCommandParse` runs (it needs no privileges); `param.py` and `probe.py` are behind
 `MTR_E2E=1 cargo test -p mtr-packet -- --ignored`.
 
+## Differences from C mtr
+
+The port matches mtr 0.96 byte for byte where it can; each intentional difference is numbered and
+documented in a code comment that cites the C source it departs from (`grep -rni deviation crates`).
+The most recent five:
+
+- 30: `-j` with several targets prints one JSON array; C concatenates objects into invalid JSON.
+- 31: CSV output quotes host names, PTR names and AS text containing commas, quotes or newlines
+  (RFC 4180); C never quotes.
+- 32: `mtr-packet` locates the ICMP header and the quoted headers with the IPv4 IHL field; C
+  assumes a 20-byte header and misparses packets carrying IP options.
+- 33: only `64:ff9b::/96` is treated as the well-known NAT64 prefix; C compares just 32 bits.
+- 34: `mtr-packet` reports `mark` support only when it actually holds `CAP_NET_ADMIN`; C claims
+  support whenever `SO_MARK` was compiled in.
+
 ## Development
 
     cargo test --workspace                           # unit, scenario and fake-helper tests
