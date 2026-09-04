@@ -4,9 +4,18 @@ fn fake_helper() -> String {
     concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-mtr-packet.py").to_string()
 }
 
-fn mtr_with_fake() -> Command {
+/// Every spawned binary starts from the same neutral environment: no `$MTR_OPTIONS`, and a config
+/// directory that cannot exist, so a developer's own ~/.config/mtr-rs/config.toml never leaks in.
+fn isolated() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_mtr"));
-    c.env_remove("MTR_OPTIONS").env("MTR_PACKET", fake_helper());
+    c.env_remove("MTR_OPTIONS")
+        .env("XDG_CONFIG_HOME", "/nonexistent/mtr-rs-tests");
+    c
+}
+
+fn mtr_with_fake() -> Command {
+    let mut c = isolated();
+    c.env("MTR_PACKET", fake_helper());
     c
 }
 
@@ -90,6 +99,7 @@ fn missing_helper_is_a_clear_fatal_error() {
 
     let mut c = Command::new(&mtr_copy);
     c.env_remove("MTR_OPTIONS")
+        .env("XDG_CONFIG_HOME", "/nonexistent/mtr-rs-tests")
         .env("MTR_PACKET", "/nonexistent/mtr-packet")
         .env("PATH", "/nonexistent");
     let (code, out, err) = run(c.arg("-r").args(FAST));
@@ -109,13 +119,13 @@ fn report_with_the_installed_c_helper() {
     if std::env::var_os("MTR_E2E").is_none() {
         return;
     }
-    let mut c = Command::new(env!("CARGO_BIN_EXE_mtr"));
-    c.env_remove("MTR_OPTIONS").env_remove("MTR_PACKET");
+    let mut c = isolated();
+    c.env_remove("MTR_PACKET");
     let (code, out, err) = run(c.args(["-r", "-n", "-c", "1", "-G", "0.2", "127.0.0.1"]));
     assert_eq!(code, Some(0), "stderr: {err}");
     assert!(out.contains("  1.|-- 127.0.0.1"), "{out}");
-    let mut c = Command::new(env!("CARGO_BIN_EXE_mtr"));
-    c.env_remove("MTR_OPTIONS").env_remove("MTR_PACKET");
+    let mut c = isolated();
+    c.env_remove("MTR_PACKET");
     let (code, out, _) = run(c.args(["-j", "-n", "-c", "1", "-G", "0.2", "127.0.0.1"]));
     assert_eq!(code, Some(0));
     assert!(out.contains("\"host\": \"127.0.0.1\""), "{out}");

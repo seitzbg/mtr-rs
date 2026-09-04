@@ -22,6 +22,9 @@ pub struct TuiOptions<'a> {
     pub glyphs: &'static Glyphs,
     pub palette: Palette,
     pub is_root: bool,
+    /// Initial view state from the config file (`display.sparkline`, `display.detail_pane`).
+    pub sparkline: bool,
+    pub detail_pane: bool,
     pub local_hostname: &'a str,
     pub target_name: &'a str,
 }
@@ -52,7 +55,7 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
     S: Stream<Item = std::io::Result<Event>> + Unpin,
 {
-    let mut ui = UiState::new();
+    let mut ui = UiState::with_view(opts.sparkline, opts.detail_pane);
     let mut dirty = true;
     let mut last_frame = Instant::now()
         .checked_sub(FRAME_MIN_GAP)

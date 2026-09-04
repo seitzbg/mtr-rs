@@ -11,7 +11,7 @@ pub mod terminal;
 
 pub use glyphs::Glyphs;
 pub use input::{Input, map_key, parse_prompt, toggle_status};
-pub use palette::{Depth, Palette};
+pub use palette::{Depth, Palette, RttThresholds};
 pub use run::{TuiOptions, TuiOutcome, run};
 pub use state::{Bounds, DetailTab, PromptKind, Quit, UiAction, UiState};
 

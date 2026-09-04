@@ -1,0 +1,37 @@
+# mtr-rs configuration file — ~/.config/mtr-rs/config.toml
+# ($XDG_CONFIG_HOME/mtr-rs/config.toml when XDG_CONFIG_HOME is set; --config PATH overrides both.)
+#
+# Precedence, lowest to highest:
+#   built-in defaults  <  this file  <  $MTR_OPTIONS  <  the command line
+#
+# Every key is optional and is shown below commented out, with its built-in default.
+# Uncomment a key to change it.
+
+[display]
+# The four upper bounds of the RTT colour ramp, in milliseconds: below the first is green, then
+# yellow, magenta and red, and at or above the last, bold red. Same as --rtt-thresholds.
+#rtt_thresholds_ms = [30, 100, 200, 500]
+# The columns to show, using the field letters of -o.
+#fields = "LS NABWV"
+# ASCII glyphs and borders instead of Unicode ones (--ascii).
+#ascii = false
+# "auto" colours unless NO_COLOR is set, "always" colours even then, "never" is --no-color.
+#color = "auto"
+# Show the Recent sparkline column when the TUI starts (toggled with d).
+#sparkline = true
+# Open the detail pane when the TUI starts (toggled with Enter).
+#detail_pane = true
+
+[probe]
+# Seconds between probe cycles (-i). Values below 1.0 need root.
+#interval = 1.0
+# The highest TTL probed (-m).
+#max_ttl = 30
+# Consecutive unanswered hops before the scan stops (-U).
+#max_unknown = 12
+# Seconds a probe may stay outstanding before it counts as lost (-Z).
+#timeout = 10
+# Resolve host names; false is -n.
+#dns = true
+# Look up origin AS numbers; true is -z.
+#asn = false

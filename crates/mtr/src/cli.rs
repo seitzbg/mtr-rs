@@ -10,7 +10,9 @@ use clap::{
 use mtr_core::{Config, MAX_PACKET, MIN_PACKET, fields};
 use mtr_proto::Protocol;
 
+use crate::config_file::ColorChoice;
 use crate::options::split_mtr_options;
+use crate::tui::palette::RttThresholds;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
@@ -108,6 +110,20 @@ pub fn split_target_port(name: &str) -> Result<Target, String> {
         name: name.to_string(),
         port: 0,
     })
+}
+
+/// `--rtt-thresholds 30,100,200,500`: the four millisecond bounds of the RTT colour ramp.
+pub fn parse_rtt_thresholds(spec: &str) -> Result<RttThresholds, String> {
+    let mut ms = Vec::new();
+    for item in spec.split(',') {
+        let n = parse_c_long(item.trim())
+            .map_err(|_| format!("invalid rtt threshold '{}' in '{spec}'", item.trim()))?;
+        if n < 0 {
+            return Err("rtt thresholds must be positive".to_string());
+        }
+        ms.push(n as u64);
+    }
+    RttThresholds::from_millis(&ms)
 }
 
 /// `parse_ipinfo_fields()` (ui/asn.c:344-392).
@@ -300,15 +316,55 @@ pub struct Args {
     /// Use ASCII glyphs and borders in the TUI
     #[arg(long = "ascii")]
     pub ascii: bool,
-    /// Disable colour in the TUI (NO_COLOR is honoured too)
+    /// Disable colour in the TUI; the same as --color never
     #[arg(long = "no-color")]
     pub no_color: bool,
+    /// When to colour the TUI (auto honours NO_COLOR, always ignores it)
+    #[arg(long = "color", value_name = "WHEN", value_enum)]
+    pub color: Option<ColorChoice>,
+    /// RTT colour ramp bounds in milliseconds (green,yellow,magenta,red)
+    #[arg(
+        long = "rtt-thresholds",
+        value_name = "MS,MS,MS,MS",
+        value_parser = parse_rtt_thresholds
+    )]
+    pub rtt_thresholds: Option<RttThresholds>,
+    /// Read the configuration from PATH instead of ~/.config/mtr-rs/config.toml
+    #[arg(long = "config", value_name = "PATH")]
+    pub config: Option<String>,
+    /// Write a commented configuration file and exit
+    #[arg(long = "init-config")]
+    pub init_config: bool,
     /// Target hosts (HOSTNAME[:PORT] with -u/-T/-S)
     #[arg(value_name = "HOSTNAME")]
     pub hosts: Vec<String>,
     /// Output mode by last-flag-wins order (mtr.c:624-660); set by [`Args::parse_argv`].
     #[arg(skip)]
     pub mode: Option<OutputMode>,
+    /// The argument ids that came from `argv` — which includes the words of `$MTR_OPTIONS`, since
+    /// [`build_argv`] prepends them. Filled by [`Args::parse_argv`]; `config_file::apply` only
+    /// fills the ids that are *not* listed here.
+    #[arg(skip)]
+    pub cli_set: std::collections::BTreeSet<String>,
+    /// `display.color`. Only the config file writes it; `--color` lands in `color` above and
+    /// wins, and `config_file::apply` leaves this `None` when `--color` was given.
+    #[arg(skip)]
+    pub color_choice: Option<ColorChoice>,
+    /// `display.sparkline`: the Recent column shown when the TUI starts (default on).
+    #[arg(skip = true)]
+    pub sparkline: bool,
+    /// `display.detail_pane`: the detail pane open when the TUI starts (default on).
+    #[arg(skip = true)]
+    pub detail_pane: bool,
+}
+
+/// The ids clap filled from `argv` rather than from a default.
+fn cli_set(m: &ArgMatches) -> std::collections::BTreeSet<String> {
+    m.ids()
+        .map(|id| id.as_str())
+        .filter(|id| m.value_source(id) == Some(ValueSource::CommandLine))
+        .map(str::to_string)
+        .collect()
 }
 
 /// The mode flags in `argv` order; the one that appears last wins, as each `case` in
@@ -340,6 +396,10 @@ pub struct Options {
     pub ipinfo_provider6: String,
     pub ascii: bool,
     pub color: bool,
+    pub rtt_thresholds: RttThresholds,
+    /// The Recent sparkline column and the detail pane, as the TUI should start.
+    pub sparkline: bool,
+    pub detail_pane: bool,
     pub config: Config,
 }
 
@@ -349,6 +409,7 @@ impl Args {
         let matches = Args::command().try_get_matches_from(argv)?;
         let mut args = Args::from_arg_matches(&matches)?;
         args.mode = output_mode(&matches);
+        args.cli_set = cli_set(&matches);
         Ok(args)
     }
 
@@ -512,7 +573,20 @@ impl Args {
             ipinfo_provider4: self.ipinfo_provider4.clone(),
             ipinfo_provider6: self.ipinfo_provider6.clone(),
             ascii: self.ascii,
-            color: !self.no_color && std::env::var_os("NO_COLOR").is_none(),
+            // `--color` wins, then `--no-color` (an alias for `--color never`), then the file;
+            // `always` is the only setting that overrides `NO_COLOR`.
+            color: match match (self.color, self.no_color) {
+                (Some(c), _) => c,
+                (None, true) => ColorChoice::Never,
+                (None, false) => self.color_choice.unwrap_or_default(),
+            } {
+                ColorChoice::Never => false,
+                ColorChoice::Always => true,
+                ColorChoice::Auto => std::env::var_os("NO_COLOR").is_none(),
+            },
+            rtt_thresholds: self.rtt_thresholds.unwrap_or_default(),
+            sparkline: self.sparkline,
+            detail_pane: self.detail_pane,
             config,
         })
     }
@@ -883,6 +957,38 @@ mod tests {
             .unwrap();
         assert_eq!(o.config.max_ping, 5);
         assert!(build_argv(Some("'"), std::iter::empty::<String>()).is_err());
+    }
+
+    #[test]
+    fn rtt_thresholds_flag() {
+        assert_eq!(
+            opts(&["--rtt-thresholds", "5,10,20,40", "h"])
+                .unwrap()
+                .rtt_thresholds
+                .to_millis(),
+            [5, 10, 20, 40]
+        );
+        assert_eq!(
+            opts(&["h"]).unwrap().rtt_thresholds,
+            RttThresholds::default()
+        );
+        assert_eq!(
+            parse_rtt_thresholds("5,10,20"),
+            Err("rtt thresholds need exactly 4 values, got 3".to_string())
+        );
+        assert_eq!(
+            parse_rtt_thresholds("5, 10, 20, 40").map(|t| t.to_millis()),
+            Ok([5, 10, 20, 40])
+        );
+        assert_eq!(
+            parse_rtt_thresholds("5,x,20,40"),
+            Err("invalid rtt threshold 'x' in '5,x,20,40'".to_string())
+        );
+        assert_eq!(
+            parse_rtt_thresholds("5,-10,20,40"),
+            Err("rtt thresholds must be positive".to_string())
+        );
+        assert!(Args::try_parse_from(["mtr", "--rtt-thresholds", "5,4,3,2", "h"]).is_err());
     }
 
     #[test]
