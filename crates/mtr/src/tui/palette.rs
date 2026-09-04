@@ -1,4 +1,7 @@
-//! Colour depth ladder and the semantic styles of the TUI (spec §8).
+//! Colour depth ladder and the semantic styles of the TUI (spec §8). Every style uses the
+//! terminal's own named ANSI colours, so the theme decides the exact green/yellow/red and the
+//! display looks the same locally and over ssh (which drops `COLORTERM`); the depth only decides
+//! colour versus mono.
 //! Ported from ui/curses.c (mtr 0.96, commit 7b01773). GPL-2.0-only.
 
 use ratatui::style::{Color, Modifier, Style};
@@ -102,30 +105,28 @@ impl Palette {
         }
     }
 
-    fn fg(&self, ansi: Color, idx: u8, rgb: (u8, u8, u8)) -> Style {
+    fn fg(&self, ansi: Color) -> Style {
         let s = Style::new();
         match self.depth {
             Depth::Mono => s,
-            Depth::Ansi16 => s.fg(ansi),
-            Depth::Ansi256 => s.fg(Color::Indexed(idx)),
-            Depth::TrueColor => s.fg(Color::Rgb(rgb.0, rgb.1, rgb.2)),
+            Depth::Ansi16 | Depth::Ansi256 | Depth::TrueColor => s.fg(ansi),
         }
     }
 
     fn green(&self) -> Style {
-        self.fg(Color::Green, 114, (0x8e, 0xc0, 0x7c))
+        self.fg(Color::Green)
     }
     fn yellow(&self) -> Style {
-        self.fg(Color::Yellow, 221, (0xe5, 0xc0, 0x7b))
+        self.fg(Color::Yellow)
     }
     fn magenta(&self) -> Style {
-        self.fg(Color::Magenta, 176, (0xc6, 0x78, 0xdd))
+        self.fg(Color::Magenta)
     }
     fn red(&self) -> Style {
-        self.fg(Color::Red, 203, (0xe0, 0x6c, 0x75))
+        self.fg(Color::Red)
     }
     fn blue(&self) -> Style {
-        self.fg(Color::Blue, 75, (0x61, 0xaf, 0xef))
+        self.fg(Color::Blue)
     }
 
     /// Loss% cell colour; `permille` is `Hop::loss()` (per-mille ×100, i.e. 100 000 = 100 %).
