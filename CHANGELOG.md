@@ -8,6 +8,7 @@ All notable changes to mtr-rs are documented here. The format follows
 
 ### Added
 ### Changed
+- mtr-packet reports `mark` support only when it actually holds CAP_NET_ADMIN, and keeps that one capability across the privilege drop when granted, so `--mark` works (deviation 34, CR-03).
 - `-j` with several targets prints one JSON array instead of concatenated objects (deviation 30, CR-04).
 ### Fixed
 - `-i`, `-G`, the config file and the TUI interval prompt reject `nan`, `inf` and absurdly large values instead of freezing the schedule (CR-02).
@@ -15,6 +16,7 @@ All notable changes to mtr-rs are documented here. The format follows
 - CSV output quotes host names, PTR names and AS text that contain commas, quotes or newlines (RFC 4180; deviation 31, CR-06).
 - Out-of-range `-M`, `-c`, `-U`, `-Z`, `--rtt-thresholds` values are rejected instead of silently wrapping (CR-10).
 - AS lookups treat only `64:ff9b::/96` as NAT64 (C checks 32 bits; deviation 33, CR-09).
+- mtr-packet parses IPv4 packets and quoted headers with IP options (IHL > 5) instead of assuming 20 bytes (deviation 32, CR-08).
 ### Security
 - `MTR_RS_LOG` is ignored when `/etc/mtr.is.run.under.sudo` exists and never truncates or follows an existing file (CR-01).
 - GitHub Actions pinned to commit SHAs, read-only tokens except the release publish step, and cargo-deny in CI (CR-07).
