@@ -4,10 +4,45 @@ Rust port of [mtr](https://github.com/traviscross/mtr) (My TraceRoute). Two bina
 an unprivileged `mtr` client and a privileged `mtr-packet` helper speaking the same line protocol
 as the C helper, so either side interoperates with the C implementation. GPL-2.0-only.
 
-Status: **Plans A, B and C complete** — the interactive TUI is the default, `mtr -r/-w/-j/-C` produce
+Status: **Plans A–D complete** — the interactive TUI is the default, `mtr -r/-w/-j/-C` produce
 the classic reports, and the Rust `mtr-packet` helper ships alongside them. Either helper works:
 `$MTR_PACKET` overrides the search path, so the client can drive our helper or the installed C one,
-and the C client can drive ours.
+and the C client can drive ours. Packaged: release tarballs and a Debian package, generated man
+pages and completions, and scripts/install.sh.
+
+## Installation
+
+From a release. The tarball unpacks to `<version>-<arch>/{bin,man,completions}`:
+
+    tar xzf mtr-rs-0.1.0-x86_64.tar.gz
+    sudo install -m 755 0.1.0-x86_64/bin/mtr 0.1.0-x86_64/bin/mtr-packet /usr/local/bin/
+    sudo install -m 644 0.1.0-x86_64/man/*.8 /usr/local/share/man/man8/
+    sudo setcap cap_net_raw+ep /usr/local/bin/mtr-packet
+
+On Debian and Ubuntu the `.deb` installs the same files and runs `setcap` from its `postinst`:
+
+    sudo dpkg -i mtr-rs_0.1.0-1_amd64.deb
+
+The package is named `mtr-rs` and declares `Conflicts: mtr, mtr-tiny`, because it owns
+`/usr/bin/mtr` and `/usr/bin/mtr-packet`. Installing it therefore removes the distribution's
+`mtr` or `mtr-tiny` package — that conflict is by design, not a packaging accident.
+
+From a checkout, `scripts/install.sh` builds both binaries, installs them with the `mtr(8)` and
+`mtr-packet(8)` man pages and the bash, zsh and fish completions, and then runs `setcap`:
+
+    scripts/install.sh                      # --prefix DIR (default /usr/local), --no-build,
+    scripts/install.sh --uninstall          # --no-setcap, --uninstall; --help lists them
+
+Root is needed only for a system prefix and for `setcap`. `--uninstall` removes exactly the files
+it installed. If `setcap` is missing or fails, the script prints the exact command to run and still
+exits 0: `mtr-packet` keeps working on its unprivileged ICMP-DGRAM fallback, which requires your
+gid to be inside `net.ipv4.ping_group_range`.
+
+Binaries only, without man pages or completions:
+
+    cargo install --path crates/mtr
+    cargo install --path crates/mtr-packet
+    sudo setcap cap_net_raw+ep "$(command -v mtr-packet)"
 
 ## Usage
 
@@ -135,5 +170,21 @@ In `cargo test` only
     cargo test --workspace                           # unit, scenario and fake-helper tests
     INSTA_UPDATE=always cargo test -p mtr --test tui_snapshots   # accept intended screen changes
     MTR_E2E=1 cargo test -p mtr -- --ignored         # real DNS and the installed C helper
+
+    cargo xtask man                                  # target/dist/man/{mtr.8,mtr-packet.8}
+    cargo xtask completions                          # target/dist/completions/{mtr.bash,_mtr,mtr.fish}
+    cargo xtask dist                                 # both, plus a release build, laid out as
+                                                     # target/dist/<version>-<arch>/{bin,man,completions}
+
+### Releasing
+
+1. Bump `version` under `[workspace.package]` in the root `Cargo.toml`, run `cargo check --workspace`
+   so `Cargo.lock` follows, and commit.
+2. `git tag v0.1.0 && git push --tags`. The tag must be the workspace version with a leading `v`;
+   `.github/workflows/release.yml` compares them and fails the job otherwise.
+3. The `release` workflow builds x86_64 and aarch64, runs `scripts/check-deb.sh`, and attaches
+   `mtr-rs-<version>-<arch>.tar.gz` and `mtr-rs_<version>-1_<debarch>.deb` to the GitHub release
+   for the tag. A `workflow_dispatch` run with `dry_run: "true"` builds the same artifacts, uploads
+   them as workflow artifacts, and creates no release.
 
 Design: `docs/superpowers/specs/`. Plans: `docs/superpowers/plans/`.

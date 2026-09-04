@@ -51,7 +51,7 @@ wire-compatible with mtr 0.96. Installs /usr/bin/mtr and /usr/bin/mtr-packet
 and therefore conflicts with the distribution's mtr packages."""
 section = "net"
 priority = "optional"
-depends = "$auto"
+depends = "$auto, libcap2-bin"  # postinst runs setcap(8)
 conflicts = "mtr, mtr-tiny"
 maintainer-scripts = "../../packaging/debian"
 assets = [

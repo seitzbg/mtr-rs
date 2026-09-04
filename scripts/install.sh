@@ -19,7 +19,16 @@ while [ $# -gt 0 ]; do
     --no-build) build=0; shift ;;
     --no-setcap) setcap=0; shift ;;
     --uninstall) uninstall=1; shift ;;
-    -h|--help) sed -n '3,9p' "$0"; exit 0 ;;
+    -h|--help)
+      cat <<'EOF'
+Install (or remove) mtr-rs: both binaries, man pages, completions, and the capability
+mtr-packet needs for raw sockets.
+
+  scripts/install.sh [--prefix DIR] [--no-build] [--no-setcap] [--uninstall]
+
+Defaults: --prefix /usr/local. Root is needed only for a system prefix and for setcap.
+EOF
+      exit 0 ;;
     *) echo "install.sh: unknown option $1" >&2; exit 1 ;;
   esac
 done

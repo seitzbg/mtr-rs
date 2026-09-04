@@ -271,7 +271,6 @@ mod tests {
         let from = base.join("versioned/man");
         let to = base.join("flat/man");
         fs::create_dir_all(&from).unwrap();
-        write(&from.join("mtr.8"), b"stale-should-be-replaced").unwrap();
         // A pre-existing file under `to` that isn't in `from` must not survive the mirror.
         fs::create_dir_all(&to).unwrap();
         write(&to.join("leftover.8"), b"leftover").unwrap();
