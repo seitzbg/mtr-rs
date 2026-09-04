@@ -1,0 +1,390 @@
+//! Socket opening, fallback and per-probe options. Ported from packet/probe_unix.c:209-486
+//! and packet/construct_unix.c:297-406, 614-698, 766-826 (mtr 0.96, commit 7b01773).
+//! GPL-2.0-only.
+
+use std::net::SocketAddr;
+use std::os::fd::{AsFd, BorrowedFd};
+
+use mtr_proto::CProbeParams;
+use nix::sys::socket::{setsockopt, sockopt};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+
+pub enum Sockets {
+    /// `open_ip{4,6}_sockets_raw()`: send ICMP, send UDP, receive ICMP.
+    Raw {
+        icmp_send: Socket,
+        udp_send: Socket,
+        recv: Socket,
+    },
+    /// `open_ip{4,6}_sockets_dgram()`: unprivileged ICMP and UDP sockets with `IP_RECVERR`.
+    Dgram { icmp: Socket, udp: Socket },
+}
+
+pub struct Family {
+    pub version: u8,
+    pub sockets: Sockets,
+}
+
+fn domain(version: u8) -> Domain {
+    if version == 6 {
+        Domain::IPV6
+    } else {
+        Domain::IPV4
+    }
+}
+
+fn icmp_protocol(version: u8) -> Protocol {
+    if version == 6 {
+        Protocol::ICMPV6
+    } else {
+        Protocol::ICMPV4
+    }
+}
+
+fn enable_recverr(sock: &Socket, version: u8) -> std::io::Result<()> {
+    let r = if version == 6 {
+        setsockopt(sock, sockopt::Ipv6RecvErr, &true)
+    } else {
+        setsockopt(sock, sockopt::Ipv4RecvErr, &true)
+    };
+    r.map_err(std::io::Error::from)
+}
+
+impl Family {
+    /// Raw first; on any failure the DGRAM fallback (probe_unix.c:432-447).
+    pub fn open(version: u8) -> std::io::Result<Family> {
+        let raw = (|| -> std::io::Result<Sockets> {
+            let icmp_send = Socket::new(domain(version), Type::RAW, Some(icmp_protocol(version)))?;
+            let udp_send = Socket::new(domain(version), Type::RAW, Some(Protocol::UDP))?;
+            let recv = Socket::new(domain(version), Type::RAW, Some(icmp_protocol(version)))?;
+            Ok(Sockets::Raw {
+                icmp_send,
+                udp_send,
+                recv,
+            })
+        })();
+        let sockets = match raw {
+            Ok(s) => s,
+            Err(_) => {
+                let icmp = Socket::new(domain(version), Type::DGRAM, Some(icmp_protocol(version)))?;
+                enable_recverr(&icmp, version)?;
+                let udp = Socket::new(domain(version), Type::DGRAM, Some(Protocol::UDP))?;
+                enable_recverr(&udp, version)?;
+                Sockets::Dgram { icmp, udp }
+            }
+        };
+        Ok(Family { version, sockets })
+    }
+
+    pub fn is_raw(&self) -> bool {
+        matches!(self.sockets, Sockets::Raw { .. })
+    }
+
+    /// `init_net_state()`: only the sockets we read from go non-blocking.
+    pub fn set_nonblocking(&self) -> std::io::Result<()> {
+        for fd_sock in self.recv_sockets() {
+            fd_sock.set_nonblocking(true)?;
+        }
+        Ok(())
+    }
+
+    fn recv_sockets(&self) -> Vec<&Socket> {
+        match &self.sockets {
+            Sockets::Raw { recv, .. } => vec![recv],
+            Sockets::Dgram { icmp, udp } => vec![icmp, udp],
+        }
+    }
+
+    pub fn recv_fds(&self) -> Vec<BorrowedFd<'_>> {
+        self.recv_sockets().into_iter().map(AsFd::as_fd).collect()
+    }
+
+    pub fn icmp_send(&self) -> &Socket {
+        match &self.sockets {
+            Sockets::Raw { icmp_send, .. } => icmp_send,
+            Sockets::Dgram { icmp, .. } => icmp,
+        }
+    }
+
+    pub fn udp_send(&self) -> &Socket {
+        match &self.sockets {
+            Sockets::Raw { udp_send, .. } => udp_send,
+            Sockets::Dgram { udp, .. } => udp,
+        }
+    }
+}
+
+/// `check_sctp_support()` (probe_unix.c:209-222).
+pub fn check_sctp_support() -> bool {
+    Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::SCTP)).is_ok()
+}
+
+/// The first half of C's option block: the routing mark and the bind-to-device, both applied
+/// *before* the bind (construct_unix.c:624-636 for v4, 766-778 for v6).
+pub fn set_mark_and_device(sock: &Socket, params: &CProbeParams) -> std::io::Result<()> {
+    if params.routing_mark != 0 {
+        // Needs CAP_NET_ADMIN, so only touched when the client asked for it.
+        sock.set_mark(params.routing_mark)?;
+    }
+    if let Some(dev) = &params.local_device {
+        sock.bind_device(Some(dev.as_bytes()))?;
+    }
+    Ok(())
+}
+
+/// The second half: TOS and TTL, which C sets *after* the bind (construct_unix.c:679-698,
+/// 812-826).
+pub fn set_tos_and_ttl(sock: &Socket, version: u8, params: &CProbeParams) -> std::io::Result<()> {
+    let einval = || std::io::Error::from_raw_os_error(nix::libc::EINVAL);
+    let tos = u32::try_from(params.type_of_service).map_err(|_| einval())?;
+    let ttl = u32::try_from(params.ttl).map_err(|_| einval())?;
+    if version == 6 {
+        sock.set_tclass_v6(tos)?;
+        sock.set_unicast_hops_v6(ttl)?;
+    } else {
+        sock.set_tos_v4(tos)?;
+        sock.set_ttl_v4(ttl)?;
+    }
+    Ok(())
+}
+
+/// The whole mark/device/TOS/TTL block for a socket that binds itself: the stream probes
+/// (construct_unix.c:324-406) bind inside `open_stream_socket()`, so they apply both halves at
+/// once. Keeping it in one place is why `stream.rs` (Task 13) has no copy of it.
+pub fn set_common_options(
+    sock: &Socket,
+    version: u8,
+    params: &CProbeParams,
+) -> std::io::Result<()> {
+    set_mark_and_device(sock, params)?;
+    set_tos_and_ttl(sock, version, params)
+}
+
+/// Per-probe options on a shared send socket, in C's order: mark, device, bind, TOS, TTL
+/// (construct_unix.c:624-698). `local: None` means "do not bind" — the stream path binds
+/// itself to `local:sequence` after setting `SO_REUSEPORT`/`SO_REUSEADDR` (Task 13).
+pub fn apply_probe_options(
+    sock: &Socket,
+    version: u8,
+    params: &CProbeParams,
+    local: Option<SocketAddr>,
+    is_raw: bool,
+) -> std::io::Result<()> {
+    set_mark_and_device(sock, params)?;
+    if let Some(local) = local {
+        let already_bound = match sock.local_addr()?.as_socket() {
+            Some(cur) if is_raw => cur == local,
+            Some(cur) => cur.port() != 0,
+            None => false,
+        };
+        if !already_bound {
+            sock.bind(&SockAddr::from(local))?;
+        }
+    }
+    set_tos_and_ttl(sock, version, params)
+}
+
+/// Whether a probe socket for `version` can be opened at all. The loopback tests gate on this:
+/// with neither `cap_net_raw` nor open ping sockets there is no socket to probe *with*, and
+/// those tests return early instead of failing (Global Constraints). Deliberately not
+/// `#[cfg(test)]`, so integration tests can gate on it too — and deliberately *not* used by
+/// `ipv4_opens_raw_or_falls_back_to_dgram_with_recverr` below, which must fail rather than pass
+/// vacuously if opening ever regresses.
+pub fn dgram_available(version: u8) -> bool {
+    Family::open(version).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nix::sys::socket::getsockopt;
+
+    /// Set (any non-empty value, e.g. in CI simulation) to force the two "opens on this box"
+    /// tests below to take the skip path even when the box actually does allow ping/raw
+    /// sockets — used to rehearse the GitHub-runner environment locally.
+    const FORCE_NO_PING_ENV: &str = "MTR_TEST_FORCE_NO_PING";
+
+    fn env_forces_no_ping() -> bool {
+        std::env::var_os(FORCE_NO_PING_ENV).is_some()
+    }
+
+    /// Parses `/proc/sys/net/ipv4/ping_group_range`'s `"lo hi"` (tab- or space-separated).
+    fn parse_ping_group_range(s: &str) -> Option<(u32, u32)> {
+        let mut it = s.split_whitespace();
+        let lo: u32 = it.next()?.parse().ok()?;
+        let hi: u32 = it.next()?.parse().ok()?;
+        Some((lo, hi))
+    }
+
+    /// A range with `lo > hi` (the kernel default, "1 0") allows no gid at all.
+    fn range_allows_gid(range: (u32, u32), gid: u32) -> bool {
+        range.0 <= range.1 && gid >= range.0 && gid <= range.1
+    }
+
+    /// Independent env signal #1: does this process belong to a gid inside
+    /// `ping_group_range`? That's what lets an unprivileged process open a DGRAM ICMP
+    /// ("ping") socket at all, raw or otherwise.
+    fn ping_sockets_allowed() -> bool {
+        if env_forces_no_ping() {
+            return false;
+        }
+        let Ok(contents) = std::fs::read_to_string("/proc/sys/net/ipv4/ping_group_range") else {
+            return false;
+        };
+        let Some(range) = parse_ping_group_range(&contents) else {
+            return false;
+        };
+        if range_allows_gid(range, nix::unistd::getgid().as_raw()) {
+            return true;
+        }
+        // `getgroups()` needs nix's "user" feature, which this crate enables; fall back to
+        // egid-only if that ever changes.
+        nix::unistd::getgroups()
+            .map(|groups| groups.iter().any(|g| range_allows_gid(range, g.as_raw())))
+            .unwrap_or(false)
+    }
+
+    /// Independent env signal #2: CAP_NET_RAW in the effective capability set, per
+    /// `/proc/self/status`'s `CapEff` (bit 13 — see capability.h).
+    fn caps_net_raw() -> bool {
+        if env_forces_no_ping() {
+            return false;
+        }
+        let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+            return false;
+        };
+        for line in status.lines() {
+            if let Some(hex) = line.strip_prefix("CapEff:") {
+                if let Ok(val) = u64::from_str_radix(hex.trim(), 16) {
+                    return val & (1 << 13) != 0;
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether this host has any IPv6 configured at all (even just loopback); empty/missing
+    /// means the kernel has IPv6 fully disabled and `Family::open(6)` has nothing to bind.
+    fn ipv6_available() -> bool {
+        std::fs::read_to_string("/proc/net/if_inet6")
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn ping_group_range_parser_gates_by_gid() {
+        let disallow_all = parse_ping_group_range("1\t0").unwrap();
+        assert!(!range_allows_gid(disallow_all, 0));
+        assert!(!range_allows_gid(disallow_all, 1));
+        assert!(!range_allows_gid(disallow_all, 1000));
+
+        let allow_all = parse_ping_group_range("0\t2147483647").unwrap();
+        assert!(range_allows_gid(allow_all, 0));
+        assert!(range_allows_gid(allow_all, 1000));
+        assert!(range_allows_gid(allow_all, 2147483647));
+
+        assert_eq!(parse_ping_group_range("garbage"), None);
+    }
+
+    /// The DGRAM fallback is worthless without `IP_RECVERR`/`IPV6_RECVERR`: it is the only way
+    /// a time-exceeded ever reaches us on a ping socket (probe_unix.c:815-819).
+    fn assert_recverr(f: &Family) {
+        if let Sockets::Dgram { icmp, udp } = &f.sockets {
+            for sock in [icmp, udp] {
+                let on = if f.version == 6 {
+                    getsockopt(sock, sockopt::Ipv6RecvErr).unwrap()
+                } else {
+                    getsockopt(sock, sockopt::Ipv4RecvErr).unwrap()
+                };
+                assert!(
+                    on,
+                    "RECVERR must be set on every IPv{} DGRAM socket",
+                    f.version
+                );
+            }
+        }
+    }
+
+    /// Gated only on an *independent* environment signal (CAP_NET_RAW or an allowed ping
+    /// group), never on `dgram_available()`/`Family::open().is_ok()` — that would make this
+    /// test pass vacuously if opening ever regressed (Task 7 review). On a box with neither
+    /// signal (e.g. a GitHub-hosted runner with default `ping_group_range` and no
+    /// `cap_net_raw`) neither raw nor DGRAM sockets can open, so we skip instead of failing.
+    #[test]
+    fn ipv4_opens_raw_or_falls_back_to_dgram_with_recverr() {
+        if !caps_net_raw() && !ping_sockets_allowed() {
+            return;
+        }
+        let f = Family::open(4).expect("raw sockets with cap_net_raw, else open ping sockets");
+        assert_eq!(f.version, 4);
+        // Unprivileged test processes get the DGRAM pair; with cap_net_raw the raw triple.
+        match &f.sockets {
+            Sockets::Dgram { icmp, udp } => {
+                assert_eq!(icmp.protocol().unwrap(), Some(socket2::Protocol::ICMPV4));
+                assert_eq!(udp.protocol().unwrap(), Some(socket2::Protocol::UDP));
+                assert_eq!(f.recv_fds().len(), 2);
+            }
+            Sockets::Raw { .. } => assert_eq!(f.recv_fds().len(), 1),
+        }
+        assert_recverr(&f);
+        f.set_nonblocking().unwrap();
+    }
+
+    #[test]
+    fn ipv6_opens_too_on_this_box() {
+        if !caps_net_raw() && !ping_sockets_allowed() {
+            return;
+        }
+        if !ipv6_available() {
+            return;
+        }
+        // The box has link-local + ULA IPv6 but no global address; opening the sockets and
+        // reaching `::1` works regardless, which is all this test and the v6 loopback tests need.
+        let f = Family::open(6).expect("IPv6 sockets open (loopback IPv6 is always present)");
+        assert_eq!(f.version, 6);
+        assert_recverr(&f);
+    }
+
+    #[test]
+    fn sctp_support_is_detected() {
+        // Opening the socket is what autoloads the module, so probe first and read after.
+        let detected = check_sctp_support();
+        let module_present = std::fs::read_to_string("/proc/net/protocols")
+            .map(|s| s.lines().any(|l| l.starts_with("SCTP")))
+            .unwrap_or(false);
+        if module_present {
+            assert!(
+                detected,
+                "the sctp module is loaded, so the probe socket must open"
+            );
+        } else {
+            assert!(
+                !detected,
+                "no SCTP in /proc/net/protocols, yet a socket opened"
+            );
+        }
+    }
+
+    #[test]
+    fn probe_options_apply_to_a_dgram_socket() {
+        if !dgram_available(4) {
+            eprintln!("skipping: no IPv4 probe sockets");
+            return;
+        }
+        let f = Family::open(4).unwrap();
+        let params = mtr_proto::CProbeParams {
+            ttl: 7,
+            type_of_service: 0x10,
+            ..Default::default()
+        };
+        let local: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        apply_probe_options(f.icmp_send(), 4, &params, Some(local), f.is_raw()).unwrap();
+        assert_eq!(f.icmp_send().ttl_v4().unwrap(), 7);
+        assert_eq!(f.icmp_send().tos_v4().unwrap(), 0x10);
+        // With `local: None` (the stream path, Task 13) nothing is bound.
+        let unbound = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).unwrap();
+        apply_probe_options(&unbound, 4, &params, None, false).unwrap();
+        assert_eq!(unbound.ttl_v4().unwrap(), 7);
+        assert_eq!(unbound.local_addr().unwrap().as_socket().unwrap().port(), 0);
+    }
+}

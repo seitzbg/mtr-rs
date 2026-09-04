@@ -79,10 +79,31 @@ fn wide_report_json_and_csv_with_the_fake_helper() {
 
 #[test]
 fn missing_helper_is_a_clear_fatal_error() {
-    let mut c = isolated();
-    c.env("MTR_PACKET", "/nonexistent/mtr-packet")
+    // helper::candidates_from() tries $MTR_PACKET, then `mtr-packet` on $PATH, then
+    // `<dir of current exe>/mtr-packet`, then `./mtr-packet`. The two overrides below
+    // neutralise the first two candidates, but running the `mtr` binary straight out of
+    // `target/debug` would still find the sibling mtr-packet built by the workspace as the
+    // third candidate. Run a copy from an empty temp directory instead, so no sibling
+    // helper exists there either.
+    let dir = std::env::temp_dir().join(format!(
+        "mtr-e2e-missing-helper-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mtr_copy = dir.join("mtr");
+    std::fs::copy(env!("CARGO_BIN_EXE_mtr"), &mtr_copy).unwrap();
+
+    let mut c = Command::new(&mtr_copy);
+    c.env_remove("MTR_OPTIONS")
+        .env("XDG_CONFIG_HOME", "/nonexistent/mtr-rs-tests")
+        .env("MTR_PACKET", "/nonexistent/mtr-packet")
         .env("PATH", "/nonexistent");
     let (code, out, err) = run(c.arg("-r").args(FAST));
+    let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(code, Some(1));
     assert!(err.contains("mtr-packet not found"), "{err}");
     assert!(
