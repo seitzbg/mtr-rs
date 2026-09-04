@@ -184,7 +184,7 @@ In `cargo test` only
     cargo xtask man                                  # target/dist/man/{mtr.8,mtr-packet.8}
     cargo xtask completions                          # target/dist/completions/{mtr.bash,_mtr,mtr.fish}
     cargo xtask dist                                 # both, plus a release build, laid out as
-                                                     # target/dist/<version>-<arch>/{bin,man,completions}
+                                                     # target/dist/mtr-rs-<version>-<arch>/{bin,man,completions}
 
 ### Releasing
 
