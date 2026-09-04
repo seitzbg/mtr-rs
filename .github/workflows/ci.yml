@@ -47,10 +47,12 @@ jobs:
           repository: traviscross/mtr
           ref: 7b01773
           path: mtr-c
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+      - run: sudo apt-get install -y libcap2-bin
       - run: cargo build --workspace
       - run: sudo setcap cap_net_raw+ep target/debug/mtr-packet
       - name: Build and empower the upstream raw-ICMP listener
