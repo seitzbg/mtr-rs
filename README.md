@@ -128,6 +128,23 @@ really changed, and only then the effective, permitted and inheritable capabilit
 (the order of `drop_elevated_permissions()` in the C `packet/packet.c`). From that point it is an
 ordinary unprivileged process serving requests on the sockets it already holds.
 
+The one exception is `CAP_NET_ADMIN`, which the drop keeps — and keeps *only* when the process held it
+going in, in the effective and permitted sets, never in the inheritable one — because `SO_MARK` is set
+per probe, after the drop. That covers a helper given the capability with `setcap` and a helper run as
+root, which holds it by uid; in both cases everything else, `cap_net_raw` included, still goes. So
+`-M`/`--mark` needs `cap_net_admin` on the helper, and the client's own route lookup (a `connect()` on
+a marked UDP socket) needs it too, which in practice means running `mtr` as root. (`CAP_NET_ADMIN` is
+what the kernel checks for `SO_MARK` here; since Linux 5.17 `cap_net_raw` also unlocks it, but the drop
+removes that one. Inside a user namespace whose network namespace belongs to a different user
+namespace, the capability is not enough and `setsockopt` still fails.) Grant both capabilities to the
+helper with:
+
+    sudo setcap cap_net_raw,cap_net_admin+ep "$(command -v mtr-packet)"
+
+`check-support feature mark` answers `ok` only when the helper really holds `CAP_NET_ADMIN`; C always
+says `ok` and then fails in `setsockopt()`. The packaging (`packaging/debian/postinst`,
+`scripts/install.sh`) grants `cap_net_raw` only, so `--mark` is opt-in.
+
 Without `cap_net_raw` (and without root) the raw sockets fail to open and the helper falls back to
 unprivileged `SOCK_DGRAM` ICMP/UDP sockets with `IP_RECVERR`/`IPV6_RECVERR`, reading ICMP errors off
 the socket error queue. That path needs the kernel's ping sockets to be open to your group
