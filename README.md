@@ -29,14 +29,22 @@ The package is named `mtr-rs` and declares `Conflicts: mtr, mtr-tiny`, because i
 `/usr/bin/mtr` and `/usr/bin/mtr-packet`. Installing it therefore removes the distribution's
 `mtr` or `mtr-tiny` package — that conflict is by design, not a packaging accident.
 
-From a checkout, `scripts/install.sh` builds both binaries, installs them with the `mtr(8)` and
-`mtr-packet(8)` man pages and the bash, zsh and fish completions, and then runs `setcap`:
+From a checkout, `scripts/install.sh` installs both binaries with the `mtr(8)` and `mtr-packet(8)`
+man pages and the bash, zsh and fish completions, and then runs `setcap`. The default prefix is
+`/usr/local`, which needs root — so build the artefacts as yourself and copy them as root:
 
-    scripts/install.sh                      # --prefix DIR (default /usr/local), --no-build,
-    scripts/install.sh --uninstall          # --no-setcap, --uninstall; --help lists them
+    cargo build --release --workspace && cargo xtask dist
+    sudo scripts/install.sh --no-build
 
-Root is needed only for a system prefix and for `setcap`. `--uninstall` removes exactly the files
-it installed. If `setcap` is missing or fails, the script prints the exact command to run and still
+`--no-build` compiles nothing and never invokes cargo, so nothing is built as root; it fails with
+the `cargo xtask dist` command to run if the man pages or completions are missing. For a
+single-user install no root is needed at all, and the script builds for you:
+
+    scripts/install.sh --prefix ~/.local
+
+    scripts/install.sh --uninstall --prefix ~/.local   # --no-setcap and --help also exist
+
+`--uninstall` removes exactly the files it installed (pass the same `--prefix`). If `setcap` is missing or fails, the script prints the exact command to run and still
 exits 0: `mtr-packet` keeps working on its unprivileged ICMP-DGRAM fallback, which requires your
 gid to be inside `net.ipv4.ping_group_range`.
 

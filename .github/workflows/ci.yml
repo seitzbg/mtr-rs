@@ -29,6 +29,8 @@ jobs:
           sudo apt-get install -y libcap2-bin dpkg-dev
           cargo install cargo-deb --locked
       - run: cargo build --release --workspace
+      - name: Generate the man pages and completions install.sh installs
+        run: cargo xtask dist --no-build
       - name: install.sh round-trip
         run: scripts/tests/install-roundtrip.sh
       - name: Build and check the .deb
