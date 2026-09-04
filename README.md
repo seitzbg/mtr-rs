@@ -141,6 +141,14 @@ helper with:
 
     sudo setcap cap_net_raw,cap_net_admin+ep "$(command -v mtr-packet)"
 
+`CAP_NET_ADMIN` is one of Linux's broadest capabilities — interface and routing configuration,
+netfilter rules, promiscuous mode, netlink administration — so keeping it buys far more than
+`SO_MARK`, and the helper holds it for the whole run while parsing packets from the network. The
+drop happens before the first command is read, so a helper that started with the capability keeps
+it on *every* run, including runs that never use `-M`; the same is true under `sudo mtr`, where
+the helper now ends up with `cap_net_admin` instead of an empty effective set. Grant it only if
+you actually use `-M`/`--mark`.
+
 `check-support feature mark` answers `ok` only when the helper really holds `CAP_NET_ADMIN`; C always
 says `ok` and then fails in `setsockopt()`. The packaging (`packaging/debian/postinst`,
 `scripts/install.sh`) grants `cap_net_raw` only, so `--mark` is opt-in.
@@ -197,16 +205,19 @@ In `cargo test` only
 
 The port matches mtr 0.96 byte for byte where it can; each intentional difference is numbered and
 documented in a code comment that cites the C source it departs from (`grep -rni deviation crates`).
-The most recent five:
+The most recent six:
 
 - 30: `-j` with several targets prints one JSON array; C concatenates objects into invalid JSON.
 - 31: CSV output quotes host names, PTR names and AS text containing commas, quotes or newlines
-  (RFC 4180); C never quotes.
+  (RFC 4180); C never quotes. Quoting fixes CSV structure only — a field beginning `=`, `+`, `-`
+  or `@` is left as it is, because neutralising spreadsheet formulas would alter the data for
+  every other consumer, so treat mtr CSV as data to parse rather than a file to double-click.
 - 32: `mtr-packet` locates the ICMP header and the quoted headers with the IPv4 IHL field; C
   assumes a 20-byte header and misparses packets carrying IP options.
 - 33: only `64:ff9b::/96` is treated as the well-known NAT64 prefix; C compares just 32 bits.
 - 34: `mtr-packet` reports `mark` support only when it actually holds `CAP_NET_ADMIN`; C claims
   support whenever `SO_MARK` was compiled in.
+- 35: C clamps `-U` below 1 to 1 and accepts a negative `-c`; we reject both with a range error.
 
 ## Development
 
