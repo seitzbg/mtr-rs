@@ -3,9 +3,10 @@
 Planned work, roughly in order. Items move to `CHANGELOG.md` when they ship; nothing here is a
 promise of a date.
 
-## 0.2
+## Later
 
 - IPv6 compat cases in CI need a self-hosted or IPv6-capable runner.
+- (Shipped in 0.1.0: footer key hints keep the `n`/`z`/`e` toggles visible at 80 columns.)
 
 ## 2.0
 

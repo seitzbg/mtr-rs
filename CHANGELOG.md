@@ -14,6 +14,7 @@ Nothing yet.
 - The client explains both fixes when the helper cannot open sockets: `setcap cap_net_raw` or widening `net.ipv4.ping_group_range`.
 
 ### Changed
+- The TUI header reserves room for the `[PAUSED]` marker next to the clock, so it stays visible at 80 columns; the header's left part is truncated instead.
 - CI gates on the upstream `probe.py` suite (IPv4) instead of only reporting it.
 - Installed binaries are now `mtr-rs` and `mtr-rs-packet` (man pages, completions and setcap hints follow); the Debian package installs alongside the distribution's mtr and no longer declares Conflicts/Provides/Replaces on `mtr`/`mtr-tiny`. The client looks for `mtr-rs-packet` first and still falls back to a C `mtr-packet` on the path.
 - `--version`, the TUI header and error messages say `mtr-rs`; CSV and JSON output keep the C names.

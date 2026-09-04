@@ -5,7 +5,7 @@ installed under their own names so they sit next to a distribution mtr: an unpri
 client and a privileged `mtr-rs-packet` helper speaking the same line protocol as the C helper, so
 either side interoperates with the C implementation. GPL-2.0-only.
 
-Status: **Plans A–D complete** — the interactive TUI is the default, `mtr-rs -r/-w/-j/-C` produce
+Status: **0.2.0** — the interactive TUI is the default, `mtr-rs -r/-w/-j/-C` produce
 the classic reports, and the Rust `mtr-rs-packet` helper ships alongside them. Either helper works:
 `$MTR_PACKET` overrides the search path, so the client can drive our helper or the installed C one,
 and the C client can drive ours. Packaged: release tarballs and a Debian package, generated man
@@ -17,15 +17,15 @@ macOS backend is a stub (`ROADMAP.md`).
 From a release. The tarball unpacks to a single `mtr-rs-<version>-<arch>/` directory holding
 `bin/`, `man/`, `completions/` and the `LICENSE` and `README.md`:
 
-    tar xzf mtr-rs-0.1.0-x86_64.tar.gz
-    cd mtr-rs-0.1.0-x86_64
+    tar xzf mtr-rs-0.2.0-x86_64.tar.gz
+    cd mtr-rs-0.2.0-x86_64
     sudo install -m 755 bin/mtr-rs bin/mtr-rs-packet /usr/local/bin/
     sudo install -m 644 man/*.8 /usr/local/share/man/man8/
     sudo setcap cap_net_raw+ep /usr/local/bin/mtr-rs-packet
 
 On Debian and Ubuntu the `.deb` installs the same files and runs `setcap` from its `postinst`:
 
-    sudo dpkg -i mtr-rs_0.1.0-1_amd64.deb
+    sudo dpkg -i mtr-rs_0.2.0-1_amd64.deb
 
 The package is named `mtr-rs` and owns only `/usr/bin/mtr-rs` and `/usr/bin/mtr-rs-packet`, so it
 installs next to the distribution's mtr; nothing is replaced. It declares no `Conflicts`,
@@ -259,7 +259,7 @@ work lives in `ROADMAP.md`.
    `version = "0.x.0"` path-dependency pins on `mtr-proto`/`mtr-core` under `[workspace.dependencies]`
    (cargo-deny's wildcard ban needs them kept in step; a mismatch breaks the build). Run
    `cargo check --workspace` so `Cargo.lock` follows, and commit.
-2. `git tag v0.1.0 && git push --tags`. The tag must be the workspace version with a leading `v`;
+2. `git tag v<version> && git push --tags` (e.g. `v0.2.0`). The tag must be the workspace version with a leading `v`;
    `.github/workflows/release.yml` compares them and fails the job otherwise.
 3. The `release` workflow builds x86_64 and aarch64, runs `scripts/check-deb.sh`, and attaches
    `mtr-rs-<version>-<arch>.tar.gz` and `mtr-rs_<version>-1_<debarch>.deb` to the GitHub release
