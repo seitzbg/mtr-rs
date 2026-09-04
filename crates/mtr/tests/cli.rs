@@ -348,3 +348,19 @@ fn color_never_in_the_file_can_be_overridden_from_the_command_line() {
     assert!(err.contains("invalid value 'sometimes'"), "{err}");
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
+
+#[test]
+fn report_mode_runs_every_target_and_keeps_going_after_a_failure() {
+    let mut c = mtr();
+    c.env(
+        "MTR_PACKET",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-mtr-packet.py"),
+    );
+    let o = c
+        .args(["-r", "-n", "-c", "1", "-G", "0.2", "192.0.2.1", "192.0.2.2"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert_eq!(o.status.code(), Some(0), "{out}");
+    assert_eq!(out.matches("Start: ").count(), 2, "{out}");
+}

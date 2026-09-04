@@ -10,6 +10,7 @@ All notable changes to mtr-rs are documented here. The format follows
 ### Changed
 ### Fixed
 - `-i`, `-G`, the config file and the TUI interval prompt reject `nan`, `inf` and absurdly large values instead of freezing the schedule (CR-02).
+- Several targets in interactive mode: only the first runs and a resolution failure is fatal, as in C; the same-family check applies to the report modes only (CR-05).
 ### Security
 - `MTR_RS_LOG` is ignored when `/etc/mtr.is.run.under.sudo` exists and never truncates or follows an existing file (CR-01).
 

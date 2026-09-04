@@ -84,6 +84,21 @@ enum TargetOutcome {
     Interrupted,
 }
 
+/// ui/mtr.c:1272-1273: the interactive display runs the first target and stops.
+fn targets_to_run(mode: OutputMode, targets: &[Target]) -> &[Target] {
+    if mode == OutputMode::Tui {
+        &targets[..targets.len().min(1)]
+    } else {
+        targets
+    }
+}
+
+/// ui/mtr.c:1238-1245: a target that does not resolve ends an interactive run; the report
+/// modes skip it and carry on with exit status 1.
+fn resolve_failure_is_fatal(mode: OutputMode) -> bool {
+    mode == OutputMode::Tui
+}
+
 /// Parse, validate and run every target; returns the process exit code.
 pub async fn run(argv: Vec<String>) -> i32 {
     let mut args = match Args::parse_argv(argv) {
@@ -162,7 +177,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
     // getaddrinfo() hint for every later target, so a dual-stack host follows the first one and
     // only a host with no address in that family fails (C: EAI_ADDRFAMILY).
     let mut af = opts.af;
-    if opts.targets.len() > 1 {
+    if opts.mode != OutputMode::Tui && opts.targets.len() > 1 {
         let requested = opts.af;
         for t in &opts.targets {
             match target::resolve_target(&t.name, af).await {
@@ -186,7 +201,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
     }
 
     let mut exit_val = 0;
-    for t in &opts.targets {
+    for t in targets_to_run(opts.mode, &opts.targets) {
         match run_target(&opts, t, af, is_root).await {
             Ok(TargetOutcome::Done) => {}
             Ok(TargetOutcome::Interrupted) => {
@@ -195,6 +210,9 @@ pub async fn run(argv: Vec<String>) -> i32 {
             }
             Err(Fatal::Skip(msg)) => {
                 eprintln!("mtr: {msg}");
+                if resolve_failure_is_fatal(opts.mode) {
+                    return 1;
+                }
                 exit_val = 1;
             }
             Err(Fatal::Abort(msg)) => {
@@ -349,6 +367,21 @@ mod tests {
             !path.exists(),
             "log file must not be created under the sudo guard"
         );
+    }
+
+    #[test]
+    fn interactive_mode_runs_only_the_first_target() {
+        use crate::cli::{OutputMode, Target};
+        let t = |n: &str| Target {
+            name: n.to_string(),
+            port: 0,
+        };
+        let all = vec![t("a"), t("b")];
+        assert_eq!(super::targets_to_run(OutputMode::Tui, &all).len(), 1);
+        assert_eq!(super::targets_to_run(OutputMode::Report, &all).len(), 2);
+        assert_eq!(super::targets_to_run(OutputMode::Json, &all).len(), 2);
+        assert!(super::resolve_failure_is_fatal(OutputMode::Tui));
+        assert!(!super::resolve_failure_is_fatal(OutputMode::Csv));
     }
 
     #[test]
