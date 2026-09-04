@@ -20,10 +20,22 @@ pub enum HelperError {
         "mtr-packet did not answer the startup check; check that it is installed and allowed to open probe sockets"
     )]
     StartupCheck,
-    #[error("Packet type unsupported: {}", .0.as_str())]
+    #[error("{}", unsupported_message(*.0))]
     Unsupported(Feature),
     #[error("mtr-packet command pipe failure: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// C prints "Packet type unsupported" for every unsupported feature. Deviation 34: `mark` is
+/// different in kind — the helper is installed but simply lacks `CAP_NET_ADMIN` — so say what
+/// is missing and how to grant it.
+fn unsupported_message(feature: Feature) -> String {
+    match feature {
+        Feature::Mark => "mtr-packet does not support --mark here: grant it cap_net_admin \
+             (sudo setcap cap_net_raw,cap_net_admin+ep \"$(command -v mtr-packet)\")"
+            .to_string(),
+        f => format!("Packet type unsupported: {}", f.as_str()),
+    }
 }
 
 #[derive(Debug)]
@@ -261,6 +273,15 @@ mod tests {
             .unwrap();
         assert!(matches!(err, HelperError::Unsupported(Feature::Sctp)));
         assert_eq!(err.to_string(), "Packet type unsupported: sctp");
+    }
+
+    #[test]
+    fn unsupported_mark_explains_the_missing_capability() {
+        // Deviation 34: `mark` is only supported when the helper holds CAP_NET_ADMIN, so the
+        // message has to say how to grant it rather than just "packet type unsupported".
+        let msg = HelperError::Unsupported(Feature::Mark).to_string();
+        assert!(msg.contains("cap_net_admin"), "{msg}");
+        assert!(msg.contains("--mark"), "{msg}");
     }
 
     #[tokio::test]

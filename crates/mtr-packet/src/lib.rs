@@ -27,6 +27,10 @@ pub enum Fatal {
 }
 
 /// packet.c:104-125: open sockets privileged, drop privileges, finish init, serve stdin.
+///
+/// The drop happens before a single command is read, so every `check-support` answer — including
+/// `mark`, which reports whether `CAP_NET_ADMIN` survived it (deviation 34) — describes the
+/// unprivileged process that will actually send the probes.
 pub fn run() -> Result<(), Fatal> {
     use std::os::fd::AsFd;
     #[cfg(target_os = "linux")]

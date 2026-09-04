@@ -1,5 +1,5 @@
 //! MILESTONE 3 (Task 15): run the real helper binary as a child and prove that by the time it
-//! answers commands it holds no capabilities at all — packet.c:104-125 opens the sockets first
+//! answers commands it holds no capabilities beyond a deliberately granted `CAP_NET_ADMIN` — packet.c:104-125 opens the sockets first
 //! and then calls `drop_elevated_permissions()` (packet.c:44-102), so a `feature-support` reply
 //! on stdout is proof that the drop already happened.
 //!
@@ -50,7 +50,7 @@ fn capabilities_of(pid: u32) -> Vec<(String, String)> {
 }
 
 #[test]
-fn the_running_helper_holds_no_capabilities() {
+fn the_running_helper_holds_no_capabilities_beyond_a_granted_net_admin() {
     let path = helper_path();
     let mut child = Command::new(&path)
         .stdin(Stdio::piped())
@@ -87,15 +87,35 @@ fn the_running_helper_holds_no_capabilities() {
         "unexpected reply {line:?} from {path}"
     );
 
-    // The child is now blocked on stdin, which we still hold open.
+    // The child is now blocked on stdin, which we still hold open. Deviation 34: `CAP_NET_ADMIN`
+    // (bit 12, mask 0x1000) is the one capability the drop may keep, and only in the effective
+    // and permitted sets, when the file capabilities granted it; the inheritable set is always
+    // cleared.
     let caps = capabilities_of(pid);
-    for want in ["CapEff", "CapPrm", "CapInh"] {
-        let (_, value) = caps
-            .iter()
+    let value_of = |want: &str| {
+        caps.iter()
             .find(|(k, _)| k == want)
-            .unwrap_or_else(|| panic!("no {want} in /proc/{pid}/status: {caps:?}"));
-        assert_eq!(value, "0000000000000000", "{want} of {path} is not empty");
+            .unwrap_or_else(|| panic!("no {want} in /proc/{pid}/status: {caps:?}"))
+            .1
+            .clone()
+    };
+    assert_eq!(
+        value_of("CapInh"),
+        "0000000000000000",
+        "CapInh of {path} is not empty"
+    );
+    for want in ["CapEff", "CapPrm"] {
+        let value = value_of(want);
+        assert!(
+            value == "0000000000000000" || value == "0000000000001000",
+            "{want} of {path} is {value}, expected empty or cap_net_admin only"
+        );
     }
+    assert_eq!(
+        value_of("CapEff"),
+        value_of("CapPrm"),
+        "effective and permitted sets of {path} disagree"
+    );
 
     // Closing stdin ends the loop (lib.rs `serve`), as EOF does in packet.c:131-167. Poll for
     // the exit rather than blocking in `wait()`, so a helper that ignores EOF fails here too.
