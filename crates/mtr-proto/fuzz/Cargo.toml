@@ -1,3 +1,7 @@
+# Its own workspace: the fuzz crate is deliberately outside the mtr-rs workspace
+# (nightly-only deps), so `cargo check`/`cargo fuzz` work standalone here.
+[workspace]
+
 [package]
 name = "mtr-proto-fuzz"
 version = "0.0.0"

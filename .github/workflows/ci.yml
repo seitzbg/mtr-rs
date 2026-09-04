@@ -16,3 +16,51 @@ jobs:
       - run: cargo test --workspace
         env:
           INSTA_UPDATE: "no"
+
+  # The upstream Python helper suites (test/{cmdparse,param,probe}.py from the C repo)
+  # run against our helper. GitHub runners have no installed C `mtr-packet`, so the
+  # wrapper's ours-vs-baseline comparison has no baseline to cancel environmental
+  # failures against ("baseline: n/a"). We therefore split the suites by how much
+  # signal they can carry on a bare runner:
+  #   * cmdparse.py TestCommandParse is hermetic (command parsing only, no network,
+  #     no privilege) and must be green: it runs as a plain suite run, so *any*
+  #     failure fails the job and nothing is masked by the known-divergence list;
+  #   * param.py and probe.py run under --report-only. probe.py needs the public
+  #     internet (8.8.8.8, Google's IPv6 DNS) and param.py depends on the listener's
+  #     SEQUENCE_NUM matching MIN_PORT (upstream's copy still says 33000, so we
+  #     rebuild it at 33434 below); their summaries are in the log for inspection but
+  #     do not gate. Build a C helper here and set MTR_BASELINE to make them gating.
+  helper-compat:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: traviscross/mtr
+          ref: 7b01773
+          path: mtr-c
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: cargo build --workspace
+      - run: sudo setcap cap_net_raw+ep target/debug/mtr-packet
+      - name: Build and empower the upstream raw-ICMP listener
+        # packet_listen.c hard-codes SEQUENCE_NUM 33000, but MIN_PORT moved to 33434
+        # in mtr 0.96, so patch a scratch copy (see run.sh --listen-seq).
+        run: |
+          sed 's/^#define SEQUENCE_NUM .*/#define SEQUENCE_NUM 33434/' \
+            mtr-c/test/packet_listen.c > "$RUNNER_TEMP/packet_listen.c"
+          cc -I mtr-c -o mtr-c/test/mtr-packet-listen "$RUNNER_TEMP/packet_listen.c"
+          sudo setcap cap_net_raw+ep mtr-c/test/mtr-packet-listen
+      - name: cmdparse (must pass)
+        run: tests/compat/run.sh cmdparse TestCommandParse -v
+        env:
+          MTR_PACKET: ${{ github.workspace }}/target/debug/mtr-packet
+          MTR_C_REPO: ${{ github.workspace }}/mtr-c
+      - name: param + probe (report only, need network and capabilities)
+        run: tests/compat/run.sh --report-only param probe
+        env:
+          MTR_PACKET: ${{ github.workspace }}/target/debug/mtr-packet
+          MTR_C_REPO: ${{ github.workspace }}/mtr-c

@@ -4,9 +4,10 @@ Rust port of [mtr](https://github.com/traviscross/mtr) (My TraceRoute). Two bina
 an unprivileged `mtr` client and a privileged `mtr-packet` helper speaking the same line protocol
 as the C helper, so either side interoperates with the C implementation. GPL-2.0-only.
 
-Status: **Plans A and B complete** — the interactive TUI is the default; `mtr -r/-w/-j/-C` produce the
-classic reports. Both drive the installed C `mtr-packet` (`$MTR_PACKET` overrides the search path).
-The Rust `mtr-packet` (Plan C) comes next.
+Status: **Plans A, B and C complete** — the interactive TUI is the default, `mtr -r/-w/-j/-C` produce
+the classic reports, and the Rust `mtr-packet` helper ships alongside them. Either helper works:
+`$MTR_PACKET` overrides the search path, so the client can drive our helper or the installed C one,
+and the C client can drive ours.
 
 ## Usage
 
@@ -22,6 +23,68 @@ The Rust `mtr-packet` (Plan C) comes next.
 Keys follow C mtr (`p`/space, `r`, `n`, `z`, `e`, `s`, `b`, `i`, `f`, `m`, `o`, `Q`, `u`/`t`, `?`) plus
 `↑`/`↓`/`j`/`k` to select a hop, `Enter` to toggle the detail pane, `Tab` to switch RTT / Addresses / Log,
 and `d` to toggle the Recent sparkline column.
+
+## Helper (`mtr-packet`)
+
+`mtr-packet` is the privileged half of mtr: it opens the raw sockets, sends the probes and reports
+replies, while the `mtr` client stays unprivileged and only speaks a line protocol to it over
+stdin/stdout. Our helper is **wire-compatible** with the C `mtr-packet` of mtr 0.96, so the C client
+drives ours and our client drives the C one — the two halves are interchangeable.
+
+The client looks for a helper in the C search order: `$MTR_PACKET` (ignored when
+`/etc/mtr.is.run.under.sudo` exists), `mtr-packet` on `PATH`, `mtr-packet` next to the running
+executable, then `./mtr-packet`. When a helper reports `permission-denied` the client prints the
+install hint `sudo setcap cap_net_raw+ep "$(command -v mtr-packet)"`.
+
+### Privileges
+
+    cargo build --workspace
+    sudo setcap cap_net_raw+ep target/debug/mtr-packet
+
+The helper opens every socket it will ever need at startup and then **drops everything** before it
+reads the first byte of stdin: `setgid(getgid())`, `setuid(getuid())`, a check that the effective ids
+really changed, and only then the effective, permitted and inheritable capability sets are cleared
+(the order of `drop_elevated_permissions()` in the C `packet/packet.c`). From that point it is an
+ordinary unprivileged process serving requests on the sockets it already holds.
+
+Without `cap_net_raw` (and without root) the raw sockets fail to open and the helper falls back to
+unprivileged `SOCK_DGRAM` ICMP/UDP sockets with `IP_RECVERR`/`IPV6_RECVERR`, reading ICMP errors off
+the socket error queue. That path needs the kernel's ping sockets to be open to your group
+(`/proc/sys/net/ipv4/ping_group_range`); it answers ICMP and UDP probes, and `check-support` reports
+what actually opened. TCP and SCTP probes never need privilege.
+
+### Compat suites
+
+The upstream Python suites from the C repo run unmodified against our helper:
+
+    export MTR_C_REPO=~/git/mtr                        # default; the C checkout at 7b01773
+    MTR_PACKET=$PWD/target/debug/mtr-packet tests/compat/run.sh cmdparse TestCommandParse
+    MTR_PACKET=$PWD/target/debug/mtr-packet tests/compat/run.sh --compare       # ours vs the C helper
+    MTR_PACKET=$PWD/target/debug/mtr-packet tests/compat/run.sh --report-only probe   # never fails
+
+`--compare` runs each suite against our helper and against the baseline C helper
+(`${MTR_BASELINE:-/usr/bin/mtr-packet}`), diffs the failing sets **by unittest test id** and fails
+only on failures that are ours alone — environmental failures (no global IPv6, no network) cancel
+out. Ids on the script's known-divergence list are printed as `known: <id> -- <reason>` and never
+fail the run. `--report-only` prints the same summary and always exits 0, for runs without a
+baseline. `param.py` and `probe.py` need capabilities:
+
+    sudo setcap cap_net_raw+ep target/debug/mtr-packet
+    sudo setcap cap_net_raw+ep "$MTR_C_REPO"/test/mtr-packet-listen   # built on demand by run.sh
+
+`param.py` skips itself with a message when the listener lacks `cap_net_raw`. Its four tests are on
+the known-divergence list: upstream's `test/packet_listen.c` still hard-codes `SEQUENCE_NUM 33000`,
+but mtr commit e95eaf4 moved `MIN_PORT` to 33434 in `packet/probe_unix.h`, so a 0.96-conformant
+helper (ours, and the C helper at 7b01773) makes the listener time out. To verify `param.py`
+positively, rebuild the listener for the real first sequence — the wrapper patches a scratch copy of
+the source under `target/compat/` rather than touching the C repo:
+
+    tests/compat/run.sh --listen-seq 33434 param -v      # or MTR_LISTEN_SEQUENCE=33434
+    sudo setcap cap_net_raw+ep "$MTR_C_REPO"/test/mtr-packet-listen   # the rebuild drops the cap
+
+In `cargo test` only
+`cmdparse.py TestCommandParse` runs (it needs no privileges); `param.py` and `probe.py` are behind
+`MTR_E2E=1 cargo test -p mtr-packet -- --ignored`.
 
 ## Development
 
