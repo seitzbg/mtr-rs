@@ -10,6 +10,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # rust-toolchain.toml pins stable for the whole repo; cargo-fuzz needs nightly, and
+    # RUSTUP_TOOLCHAIN outranks the file.
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Pinned to master: the action normally infers the toolchain from its @rev, which
