@@ -63,6 +63,22 @@ pub fn dist_dir_name() -> String {
     format!("{}-{}", version(), arch())
 }
 
+/// The `.TH` date field: `SOURCE_DATE_EPOCH` (seconds since the Unix epoch, for reproducible
+/// builds) if set, else today's UTC date. Either way, deterministic for a given environment.
+pub fn man_date() -> String {
+    let ts = match std::env::var("SOURCE_DATE_EPOCH")
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok())
+        .and_then(|secs| jiff::Timestamp::from_second(secs).ok())
+    {
+        Some(ts) => ts,
+        None => jiff::Timestamp::now(),
+    };
+    ts.to_zoned(jiff::tz::TimeZone::UTC)
+        .strftime("%Y-%m-%d")
+        .to_string()
+}
+
 /// `mtr.8` rendered from the client's clap definition.
 pub fn render_man(cmd: clap::Command) -> Vec<u8> {
     // `Args` disables the `--version` flag but clap still needs a version string set on the
@@ -71,6 +87,8 @@ pub fn render_man(cmd: clap::Command) -> Vec<u8> {
     let man = clap_mangen::Man::new(cmd)
         .title("mtr")
         .section("8")
+        .date(man_date())
+        .source(format!("mtr-rs {}", version()))
         .manual("mtr-rs manual");
     let mut buf = Vec::new();
     man.render(&mut buf).expect("writing to a Vec cannot fail");
@@ -184,6 +202,24 @@ mod tests {
             page.contains(".TH mtr 8"),
             "{}",
             &page[..page.len().min(160)]
+        );
+        let th_line = page
+            .lines()
+            .find(|line| line.starts_with(".TH mtr 8"))
+            .expect(".TH line missing");
+        let date_field = th_line
+            .split_whitespace()
+            .nth(3)
+            .unwrap_or("")
+            .trim_matches('"');
+        assert!(
+            date_field.len() == 10
+                && date_field.as_bytes()[4] == b'-'
+                && date_field.as_bytes()[7] == b'-'
+                && date_field[..4].bytes().all(|b| b.is_ascii_digit())
+                && date_field[5..7].bytes().all(|b| b.is_ascii_digit())
+                && date_field[8..10].bytes().all(|b| b.is_ascii_digit()),
+            ".TH date field is not YYYY-MM-DD: {th_line:?}"
         );
         assert!(page.contains(".SH NAME"));
         assert!(
