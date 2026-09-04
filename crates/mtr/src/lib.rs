@@ -27,11 +27,25 @@ use crate::names::NameCache;
 use crate::resolver::{Resolver, ResolverConfig};
 
 /// `MTR_RS_LOG=<file>` enables tracing output (level via `MTR_RS_LOG_LEVEL`, default `debug`).
-fn init_logging() {
+/// Ignored under the sudo guard: the path comes from the environment of a possibly privileged
+/// invocation, the same rule as `$MTR_PACKET`, `-F` and `--config`.
+pub fn init_logging(sudo_guard: bool) {
     let Some(path) = std::env::var_os("MTR_RS_LOG") else {
         return;
     };
-    let Ok(file) = std::fs::File::create(&path) else {
+    init_logging_to(sudo_guard, std::path::Path::new(&path));
+}
+
+fn init_logging_to(sudo_guard: bool, path: &std::path::Path) {
+    if sudo_guard {
+        return;
+    }
+    // create_new: never truncate or follow an existing file into somewhere we did not intend.
+    let Ok(file) = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    else {
         return;
     };
     let filter = tracing_subscriber::EnvFilter::try_from_env("MTR_RS_LOG_LEVEL")
@@ -45,7 +59,6 @@ fn init_logging() {
 
 /// Entry point used by the binary: environment + argv → exit code.
 pub async fn run_from_env() -> i32 {
-    init_logging();
     let env_options = std::env::var("MTR_OPTIONS").ok();
     match cli::build_argv(env_options.as_deref(), std::env::args().skip(1)) {
         Ok(argv) => run(argv).await,
@@ -86,6 +99,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
         return 0;
     }
     let sudo_guard = helper::sudo_guard_present();
+    init_logging(sudo_guard);
     if args.init_config {
         let p = match config_file::init_config_target(args.config.as_deref(), sudo_guard) {
             Ok(p) => p,
@@ -316,4 +330,32 @@ async fn run_target(
     } else {
         TargetOutcome::Done
     })
+}
+
+#[cfg(test)]
+mod tests {
+    fn temp(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("mtr-rs-log-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("mtr.log")
+    }
+
+    #[test]
+    fn logging_is_disabled_under_the_sudo_guard() {
+        let path = temp("guard");
+        super::init_logging_to(true, &path);
+        assert!(
+            !path.exists(),
+            "log file must not be created under the sudo guard"
+        );
+    }
+
+    #[test]
+    fn logging_never_truncates_an_existing_file() {
+        let path = temp("existing");
+        std::fs::write(&path, "keep me\n").unwrap();
+        super::init_logging_to(false, &path);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep me\n");
+    }
 }

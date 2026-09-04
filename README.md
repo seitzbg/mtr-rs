@@ -63,7 +63,7 @@ Binaries only, without man pages or completions:
     target/release/mtr -r -c 5 example.org            # classic report
     target/release/mtr -rwz -c 5 example.org          # wide report with AS numbers
     target/release/mtr -j example.org | jq .          # JSON, same schema as C mtr
-    MTR_RS_LOG=/tmp/mtr.log target/release/mtr 1.1.1.1  # debug log (never written to the screen)
+    MTR_RS_LOG=/tmp/mtr.log target/release/mtr 1.1.1.1  # debug log (new file only; ignored under sudo)
 
 Keys follow C mtr (`p`/space, `r`, `n`, `z`, `e`, `s`, `b`, `i`, `f`, `m`, `o`, `Q`, `u`/`t`, `?`) plus
 `↑`/`↓`/`j`/`k` to select a hop, `Enter` to toggle the detail pane, `Tab` to switch RTT / Addresses / Log,

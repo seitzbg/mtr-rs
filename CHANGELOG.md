@@ -10,6 +10,7 @@ All notable changes to mtr-rs are documented here. The format follows
 ### Changed
 ### Fixed
 ### Security
+- `MTR_RS_LOG` is ignored when `/etc/mtr.is.run.under.sudo` exists and never truncates or follows an existing file (CR-01).
 
 ## [0.1.0] - Unreleased
 
