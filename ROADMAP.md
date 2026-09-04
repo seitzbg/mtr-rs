@@ -5,7 +5,6 @@ promise of a date.
 
 ## 0.2
 
-- `--init-config` writes the current effective options, not only the defaults.
 - Footer key hints: keep the `n`/`z`/`e` toggles visible at 80 columns.
 - Remote IPv6 cases of the upstream compat suites in CI (need an IPv6-capable runner).
 

@@ -15,9 +15,9 @@ use serde::Deserialize;
 use crate::cli::Args;
 use crate::tui::palette::RttThresholds;
 
-/// What `--init-config` writes, and — byte for byte, see the test below — the content of
-/// `docs/config.example.toml`.
-pub const TEMPLATE: &str = r##"# mtr-rs configuration file — ~/.config/mtr-rs/config.toml
+/// The header of the written file: what the layout is and how the file ranks against the other
+/// sources. Kept verbatim in `docs/config.example.toml`.
+const HEADER: &str = r##"# mtr-rs configuration file — ~/.config/mtr-rs/config.toml
 # ($XDG_CONFIG_HOME/mtr-rs/config.toml when XDG_CONFIG_HOME is set; --config PATH overrides both.)
 #
 # Precedence, lowest to highest:
@@ -27,35 +27,6 @@ pub const TEMPLATE: &str = r##"# mtr-rs configuration file — ~/.config/mtr-rs/
 # Uncomment a key to change it.
 
 [display]
-# The four upper bounds of the RTT colour ramp, in milliseconds: below the first is green, then
-# yellow, magenta and red, and at or above the last, bold red. Same as --rtt-thresholds.
-#rtt_thresholds_ms = [30, 100, 200, 500]
-# The columns to show, using the field letters of -o.
-#fields = "LS NABWV"
-# ASCII glyphs and borders instead of Unicode ones (--ascii).
-#ascii = false
-# "auto" colours unless NO_COLOR is set, "always" colours even then, "never" is --no-color.
-#color = "auto"
-# Show the Recent sparkline column when the TUI starts (toggled with d).
-#sparkline = true
-# Open the detail pane when the TUI starts (toggled with Enter).
-#detail_pane = true
-
-[probe]
-# Seconds between probe cycles (-i). Values below 1.0 need root.
-#interval = 1.0
-# Seconds to wait for late replies after the last cycle (-G).
-#gracetime = 5.0
-# The highest TTL probed (-m).
-#max_ttl = 30
-# Consecutive unanswered hops before the scan stops (-U).
-#max_unknown = 12
-# Seconds a probe may stay outstanding before it counts as lost (-Z).
-#timeout = 10
-# Resolve host names; false is -n.
-#dns = true
-# Look up origin AS numbers; true is -z.
-#asn = false
 "##;
 
 /// `color = "auto" | "always" | "never"`.
@@ -69,6 +40,17 @@ pub enum ColorChoice {
     Always,
     /// Never colour.
     Never,
+}
+
+impl ColorChoice {
+    /// The spelling the file uses, i.e. the `serde(rename_all = "lowercase")` name.
+    fn as_str(self) -> &'static str {
+        match self {
+            ColorChoice::Auto => "auto",
+            ColorChoice::Always => "always",
+            ColorChoice::Never => "never",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -232,6 +214,248 @@ fn toml_message(text: &str, e: &toml::de::Error) -> String {
     format!("{} at line {line} column {column}", e.message())
 }
 
+/// The values `--init-config` writes: one field per configuration key, holding the value that is
+/// actually in effect — the built-in default, or whatever the existing file, `$MTR_OPTIONS` or
+/// the command line put in its place.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectiveConfig {
+    pub rtt_thresholds: RttThresholds,
+    pub fields: String,
+    pub ascii: bool,
+    pub color: ColorChoice,
+    pub sparkline: bool,
+    pub detail_pane: bool,
+    pub interval: f64,
+    pub gracetime: f64,
+    pub max_ttl: i64,
+    pub max_unknown: i64,
+    pub timeout: i64,
+    pub dns: bool,
+    pub asn: bool,
+}
+
+/// The built-in defaults, i.e. the clap defaults of the matching flags. A test asserts the two
+/// stay in step.
+impl Default for EffectiveConfig {
+    fn default() -> Self {
+        Self {
+            rtt_thresholds: RttThresholds::default(),
+            fields: "LS NABWV".to_string(),
+            ascii: false,
+            color: ColorChoice::Auto,
+            sparkline: true,
+            detail_pane: true,
+            interval: 1.0,
+            gracetime: 5.0,
+            max_ttl: 30,
+            max_unknown: 12,
+            timeout: 10,
+            dns: true,
+            asn: false,
+        }
+    }
+}
+
+impl EffectiveConfig {
+    /// The rendered file has to load again, so run it through the same checks [`load`] applies —
+    /// `-o LSQ` or `-i nan` are only rejected by [`Args::into_options`], which `--init-config`
+    /// never reaches.
+    fn validate(&self) -> Result<(), String> {
+        FileConfig::from(self).validate().map(|_| ())
+    }
+}
+
+impl From<&EffectiveConfig> for FileConfig {
+    fn from(c: &EffectiveConfig) -> Self {
+        FileConfig {
+            display: DisplaySection {
+                rtt_thresholds_ms: Some(
+                    c.rtt_thresholds
+                        .to_millis()
+                        .iter()
+                        .map(|&m| m as i64)
+                        .collect(),
+                ),
+                fields: Some(c.fields.clone()),
+                ascii: Some(c.ascii),
+                color: Some(c.color),
+                sparkline: Some(c.sparkline),
+                detail_pane: Some(c.detail_pane),
+            },
+            probe: ProbeSection {
+                interval: Some(c.interval),
+                gracetime: Some(c.gracetime),
+                max_ttl: Some(c.max_ttl),
+                max_unknown: Some(c.max_unknown),
+                timeout: Some(c.timeout),
+                dns: Some(c.dns),
+                asn: Some(c.asn),
+            },
+        }
+    }
+}
+
+/// The options in effect at the point `run()` calls it: [`apply`] has already merged the existing
+/// file into `args`, and clap merged `$MTR_OPTIONS` and the command line before that. The colour
+/// resolution mirrors [`Args::into_options`], minus the `NO_COLOR` lookup — that is a property of
+/// the terminal the file is written on, not a setting to save.
+pub fn effective_from_args(args: &Args) -> EffectiveConfig {
+    EffectiveConfig {
+        rtt_thresholds: args.rtt_thresholds.unwrap_or_default(),
+        fields: args
+            .order
+            .clone()
+            .unwrap_or_else(|| EffectiveConfig::default().fields),
+        ascii: args.ascii,
+        color: match (args.color, args.no_color) {
+            (Some(c), _) => c,
+            (None, true) => ColorChoice::Never,
+            (None, false) => args.color_choice.unwrap_or_default(),
+        },
+        sparkline: args.sparkline,
+        detail_pane: args.detail_pane,
+        interval: args.interval,
+        gracetime: args.gracetime,
+        max_ttl: args.max_ttl,
+        max_unknown: args.max_unknown,
+        timeout: args.timeout,
+        dns: !args.no_dns,
+        asn: args.aslookup,
+    }
+}
+
+/// `1.0`, not `1`: an integer would deserialise into `Option<f64>` as a TOML type error.
+fn toml_float(v: f64) -> String {
+    format!("{v:?}")
+}
+
+/// Basic strings, escaped — the values are validated field specs today, but the rendering must
+/// not be the thing that turns an odd one into a malformed file.
+fn toml_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => {
+                out.push_str(&format!("\\u{:04X}", c as u32))
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// A key is written commented out while it holds its built-in default, and uncommented once
+/// something changed it — so `--init-config` alone reproduces the documented example, and
+/// `--init-config -i 2` saves a file that actually sets the interval.
+fn key(out: &mut String, name: &str, value: String, is_default: bool) {
+    if is_default {
+        out.push('#');
+    }
+    out.push_str(name);
+    out.push_str(" = ");
+    out.push_str(&value);
+    out.push('\n');
+}
+
+/// The file `--init-config` writes; `render(&EffectiveConfig::default())` is, byte for byte (see
+/// the test below), `docs/config.example.toml`.
+pub fn render(cfg: &EffectiveConfig) -> String {
+    let d = EffectiveConfig::default();
+    let mut s = String::from(HEADER);
+    s.push_str(
+        "# The four upper bounds of the RTT colour ramp, in milliseconds: below the first is green, then\n\
+         # yellow, magenta and red, and at or above the last, bold red. Same as --rtt-thresholds.\n",
+    );
+    let ms = cfg.rtt_thresholds.to_millis();
+    let list = ms.iter().map(u64::to_string).collect::<Vec<_>>().join(", ");
+    key(
+        &mut s,
+        "rtt_thresholds_ms",
+        format!("[{list}]"),
+        cfg.rtt_thresholds == d.rtt_thresholds,
+    );
+    s.push_str("# The columns to show, using the field letters of -o.\n");
+    key(
+        &mut s,
+        "fields",
+        toml_string(&cfg.fields),
+        cfg.fields == d.fields,
+    );
+    s.push_str("# ASCII glyphs and borders instead of Unicode ones (--ascii).\n");
+    key(&mut s, "ascii", cfg.ascii.to_string(), cfg.ascii == d.ascii);
+    s.push_str(
+        "# \"auto\" colours unless NO_COLOR is set, \"always\" colours even then, \"never\" is --no-color.\n",
+    );
+    key(
+        &mut s,
+        "color",
+        toml_string(cfg.color.as_str()),
+        cfg.color == d.color,
+    );
+    s.push_str("# Show the Recent sparkline column when the TUI starts (toggled with d).\n");
+    key(
+        &mut s,
+        "sparkline",
+        cfg.sparkline.to_string(),
+        cfg.sparkline == d.sparkline,
+    );
+    s.push_str("# Open the detail pane when the TUI starts (toggled with Enter).\n");
+    key(
+        &mut s,
+        "detail_pane",
+        cfg.detail_pane.to_string(),
+        cfg.detail_pane == d.detail_pane,
+    );
+    s.push_str("\n[probe]\n");
+    s.push_str("# Seconds between probe cycles (-i). Values below 1.0 need root.\n");
+    key(
+        &mut s,
+        "interval",
+        toml_float(cfg.interval),
+        cfg.interval == d.interval,
+    );
+    s.push_str("# Seconds to wait for late replies after the last cycle (-G).\n");
+    key(
+        &mut s,
+        "gracetime",
+        toml_float(cfg.gracetime),
+        cfg.gracetime == d.gracetime,
+    );
+    s.push_str("# The highest TTL probed (-m).\n");
+    key(
+        &mut s,
+        "max_ttl",
+        cfg.max_ttl.to_string(),
+        cfg.max_ttl == d.max_ttl,
+    );
+    s.push_str("# Consecutive unanswered hops before the scan stops (-U).\n");
+    key(
+        &mut s,
+        "max_unknown",
+        cfg.max_unknown.to_string(),
+        cfg.max_unknown == d.max_unknown,
+    );
+    s.push_str("# Seconds a probe may stay outstanding before it counts as lost (-Z).\n");
+    key(
+        &mut s,
+        "timeout",
+        cfg.timeout.to_string(),
+        cfg.timeout == d.timeout,
+    );
+    s.push_str("# Resolve host names; false is -n.\n");
+    key(&mut s, "dns", cfg.dns.to_string(), cfg.dns == d.dns);
+    s.push_str("# Look up origin AS numbers; true is -z.\n");
+    key(&mut s, "asn", cfg.asn.to_string(), cfg.asn == d.asn);
+    s
+}
+
 /// Where `--init-config` writes: the explicit `--config` path or the XDG default. Refused under
 /// the sudo guard (the helper file /etc/mtr.is.run.under.sudo) like `--config` and `-F`, since
 /// creating files as root at a caller-chosen or `$HOME`-derived path is exactly what the guard
@@ -247,9 +471,11 @@ pub fn init_config_target(explicit: Option<&str>, guard_present: bool) -> Result
     }
 }
 
-/// `--init-config`: create the parent directories and write [`TEMPLATE`], refusing to touch an
-/// existing file. The message is path-prefixed like [`load`]'s.
-pub fn init(path: &Path) -> Result<(), String> {
+/// `--init-config`: create the parent directories and write [`render`]'s output, refusing to
+/// touch an existing file. The message is path-prefixed like [`load`]'s, except for the
+/// validation error, which is about the options and not about the file.
+pub fn init(path: &Path, cfg: &EffectiveConfig) -> Result<(), String> {
+    cfg.validate()?;
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
@@ -265,7 +491,7 @@ pub fn init(path: &Path) -> Result<(), String> {
             ),
             _ => format!("{}: {e}", path.display()),
         })?;
-    f.write_all(TEMPLATE.as_bytes())
+    f.write_all(render(cfg).as_bytes())
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
@@ -647,6 +873,79 @@ asn = true
         );
     }
 
+    fn args(argv: &[&str]) -> Args {
+        let mut v = vec!["mtr-rs".to_string()];
+        v.extend(argv.iter().map(|s| s.to_string()));
+        Args::parse_argv(v).unwrap()
+    }
+
+    #[test]
+    fn the_default_effective_config_is_what_a_bare_command_line_produces() {
+        assert_eq!(
+            effective_from_args(&args(&["h"])),
+            EffectiveConfig::default(),
+            "EffectiveConfig::default() has drifted from the clap defaults"
+        );
+    }
+
+    #[test]
+    fn render_writes_the_changed_keys_uncommented_and_leaves_the_defaults_alone() {
+        let cfg = effective_from_args(&args(&[
+            "-i",
+            "2",
+            "-n",
+            "--rtt-thresholds",
+            "20,50,100,300",
+            "h",
+        ]));
+        let text = render(&cfg);
+        assert!(text.contains("\ninterval = 2.0\n"), "{text}");
+        assert!(text.contains("\ndns = false\n"), "{text}");
+        assert!(
+            text.contains("\nrtt_thresholds_ms = [20, 50, 100, 300]\n"),
+            "{text}"
+        );
+        // untouched keys stay commented out, with their built-in defaults
+        assert!(text.contains("\n#gracetime = 5.0\n"), "{text}");
+        assert!(text.contains("\n#fields = \"LS NABWV\"\n"), "{text}");
+        assert!(text.contains("\n#asn = false\n"), "{text}");
+        // and the result is a valid file that loads back to exactly those values
+        let cfg2 = parse(&text).unwrap();
+        assert_eq!(cfg2.file.probe.interval, Some(2.0));
+        assert_eq!(cfg2.file.probe.dns, Some(false));
+        assert_eq!(cfg2.rtt_thresholds.unwrap().to_millis(), [20, 50, 100, 300]);
+        assert_eq!(cfg2.file.probe.gracetime, None);
+    }
+
+    #[test]
+    fn render_covers_every_key() {
+        let cfg = EffectiveConfig {
+            rtt_thresholds: RttThresholds::from_millis(&[5, 10, 20, 40]).unwrap(),
+            fields: "LSNB".to_string(),
+            ascii: true,
+            color: ColorChoice::Never,
+            sparkline: false,
+            detail_pane: false,
+            interval: 2.5,
+            gracetime: 2.0,
+            max_ttl: 20,
+            max_unknown: 3,
+            timeout: 7,
+            dns: false,
+            asn: true,
+        };
+        let text = render(&cfg);
+        assert!(
+            !text
+                .lines()
+                .any(|l| l.starts_with('#') && l.contains(" = ")),
+            "no key should be commented out: {text}"
+        );
+        let mut a = args(&["h"]);
+        apply(&mut a, &parse(&text).unwrap());
+        assert_eq!(effective_from_args(&a), cfg);
+    }
+
     #[test]
     fn the_template_matches_the_documented_example_byte_for_byte() {
         let doc = concat!(
@@ -655,17 +954,18 @@ asn = true
         );
         assert_eq!(
             std::fs::read_to_string(doc).unwrap(),
-            TEMPLATE,
-            "docs/config.example.toml and config_file::TEMPLATE have drifted apart"
+            render(&EffectiveConfig::default()),
+            "docs/config.example.toml and the default rendering have drifted apart"
         );
     }
 
     #[test]
     fn the_template_parses_to_the_built_in_defaults() {
         // Every key is commented out, so the written file is valid TOML that changes nothing …
-        assert_eq!(parse(TEMPLATE).unwrap(), LoadedConfig::default());
+        let template = render(&EffectiveConfig::default());
+        assert_eq!(parse(&template).unwrap(), LoadedConfig::default());
         // … and uncommenting every key yields exactly the documented defaults.
-        let all: String = TEMPLATE
+        let all: String = template
             .lines()
             .map(|l| {
                 l.strip_prefix('#')
@@ -694,14 +994,29 @@ asn = true
     }
 
     #[test]
+    fn init_refuses_values_that_would_not_load_again() {
+        let cfg = EffectiveConfig {
+            fields: "LSQ".to_string(),
+            ..EffectiveConfig::default()
+        };
+        assert_eq!(
+            init(Path::new("/nonexistent/x.toml"), &cfg).unwrap_err(),
+            "Unknown field identifier: Q"
+        );
+    }
+
+    #[test]
     fn init_writes_the_template_once_and_refuses_to_overwrite() {
         let dir = std::env::temp_dir().join(format!("mtr-rs-init-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("nested").join("config.toml");
-        init(&path).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), TEMPLATE);
+        init(&path, &EffectiveConfig::default()).unwrap();
         assert_eq!(
-            init(&path).unwrap_err(),
+            std::fs::read_to_string(&path).unwrap(),
+            render(&EffectiveConfig::default())
+        );
+        assert_eq!(
+            init(&path, &EffectiveConfig::default()).unwrap_err(),
             format!("{}: file exists, refusing to overwrite it", path.display())
         );
         // the round trip: what init wrote loads cleanly

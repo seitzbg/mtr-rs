@@ -165,25 +165,20 @@ pub async fn run(argv: Vec<String>) -> i32 {
     }
     let sudo_guard = helper::sudo_guard_present();
     init_logging(sudo_guard);
-    if args.init_config {
-        let p = match config_file::init_config_target(args.config.as_deref(), sudo_guard) {
-            Ok(p) => p,
+    // Resolved before anything is read, so the sudo guard refuses `--init-config` with its own
+    // message rather than through the `--config` check below; the file itself is written after
+    // the merge, since what it saves is the options in effect.
+    let init_target = if args.init_config {
+        match config_file::init_config_target(args.config.as_deref(), sudo_guard) {
+            Ok(p) => Some(p),
             Err(msg) => {
                 err(format_args!("config: {msg}"));
                 return 1;
             }
-        };
-        return match config_file::init(&p) {
-            Ok(()) => {
-                println!("{}", p.display());
-                0
-            }
-            Err(msg) => {
-                err(format_args!("config: {msg}"));
-                1
-            }
-        };
-    }
+        }
+    } else {
+        None
+    };
     let cfg_path = match config_file::config_source(args.config.as_deref(), sudo_guard) {
         Ok(p) => p,
         Err(msg) => {
@@ -214,6 +209,21 @@ pub async fn run(argv: Vec<String>) -> i32 {
             }
         }
     }
+    // After the config file, `$MTR_OPTIONS` and the command line have all been merged into
+    // `args`: `--init-config` writes the options in effect, not only the built-in defaults.
+    if let Some(p) = init_target {
+        return match config_file::init(&p, &config_file::effective_from_args(&args)) {
+            Ok(()) => {
+                println!("{}", p.display());
+                0
+            }
+            Err(msg) => {
+                err(format_args!("config: {msg}"));
+                1
+            }
+        };
+    }
+
     let is_root = nix::unistd::Uid::current().is_root();
     let opts = match args.into_options(is_root) {
         Ok(o) => o,

@@ -79,6 +79,11 @@ elsewhere). Write a fully commented starter file with
 
     mtr-rs --init-config   # creates the file, prints its path, never overwrites one
 
+`mtr-rs --init-config [options]` writes the options in effect — the built-in defaults, your
+existing file, `$MTR_OPTIONS` and the command line — so `mtr-rs --init-config -i 2 -z` saves a
+tuned setup. Keys still at their default stay commented out; the ones you changed are written
+uncommented.
+
 The file only supplies defaults. Precedence, lowest to highest:
 
     built-in defaults  <  config file  <  $MTR_OPTIONS  <  the command line
@@ -103,8 +108,8 @@ The file only supplies defaults. Precedence, lowest to highest:
 Every key is optional, but the file is strict: an unknown key (or an unknown `color` value) is an
 error, so a typo is reported rather than silently ignored. An absent file is normal; an unreadable
 or malformed one is a fatal `mtr-rs: config: <path>: <error>`. Under sudo `--config` is refused and
-the default path is not read, the same way `-F` is disabled. `docs/config.example.toml` is the
-same content `--init-config` writes. For a single run, `--rtt-thresholds 30,100,200,500` sets the
+the default path is not read, the same way `-F` is disabled. `docs/config.example.toml` is what
+`--init-config` writes with no other options. For a single run, `--rtt-thresholds 30,100,200,500` sets the
 colour ramp and `--color auto|always|never` overrides `display.color`.
 
 ## Helper (`mtr-rs-packet`)

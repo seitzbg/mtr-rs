@@ -475,3 +475,38 @@ fn each_target_is_resolved_once() {
     assert!(resolves[1].contains("192.0.2.2"), "{text}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// `--init-config` saves the options in effect, not only the built-in defaults: the flags on the
+/// command line (and `$MTR_OPTIONS`, and an existing file) are written out as uncommented keys.
+#[test]
+fn init_config_writes_the_effective_options() {
+    let path = temp_config("effective", "");
+    let arg = path.to_str().unwrap();
+    let o = mtr()
+        .env("MTR_OPTIONS", "-Z 3")
+        .args(["--init-config", "--config", arg, "-i", "2", "-n"])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0), "{:?}", o.stderr);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("\ninterval = 2.0\n"), "{text}");
+    assert!(text.contains("\ndns = false\n"), "{text}");
+    assert!(text.contains("\ntimeout = 3\n"), "{text}");
+    // everything untouched stays commented out at its default
+    assert!(text.contains("\n#gracetime = 5.0\n"), "{text}");
+    // and the file it wrote loads back and takes effect
+    let mut c = mtr();
+    c.env(
+        "MTR_PACKET",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-mtr-packet.py"),
+    );
+    let o = c
+        .args(["--config", arg, "-r", "-c", "1", "-G", "0.2", "192.0.2.1"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(0), "{out}{err}");
+    assert!(out.contains("Start: "), "{out}{err}");
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}

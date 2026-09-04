@@ -365,7 +365,7 @@ pub struct Args {
     /// Read the configuration from PATH instead of ~/.config/mtr-rs/config.toml
     #[arg(long = "config", value_name = "PATH")]
     pub config: Option<String>,
-    /// Write a commented configuration file and exit
+    /// Write a commented configuration file with the options in effect, and exit
     #[arg(long = "init-config")]
     pub init_config: bool,
     /// Target hosts (HOSTNAME[:PORT] with -u/-T/-S)
