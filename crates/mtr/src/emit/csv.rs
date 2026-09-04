@@ -1,5 +1,6 @@
 //! `csv_close()` (ui/report.c:557-680). GPL-2.0-only.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use mtr_core::Hop;
@@ -7,6 +8,24 @@ use mtr_core::Hop;
 use crate::asn;
 use crate::emit::ReportContext;
 use crate::names::{addr_name, hop_name};
+
+/// RFC 4180 quoting for one field. Deviation 31: C writes names verbatim; a PTR record with a
+/// comma would shift every later column.
+pub fn csv_field(s: &str) -> Cow<'_, str> {
+    if !s.contains([',', '"', '\r', '\n']) {
+        return Cow::Borrowed(s);
+    }
+    let mut q = String::with_capacity(s.len() + 2);
+    q.push('"');
+    for c in s.chars() {
+        if c == '"' {
+            q.push('"');
+        }
+        q.push(c);
+    }
+    q.push('"');
+    Cow::Owned(q)
+}
 
 pub fn render(ctx: &ReportContext<'_>, now_epoch: u64) -> String {
     let e = ctx.engine;
@@ -23,7 +42,7 @@ pub fn render(ctx: &ReportContext<'_>, now_epoch: u64) -> String {
         for f in &ctx.fields {
             o.push(',');
             if f.key != ' ' {
-                o.push_str(f.title);
+                o.push_str(&csv_field(f.title));
             }
         }
         o.push('\n');
@@ -84,12 +103,12 @@ fn row(
         "MTR.{},{},OK,{},{},{}",
         env!("CARGO_PKG_VERSION"),
         now,
-        ctx.target_name,
+        csv_field(ctx.target_name),
         hop_no,
-        name
+        csv_field(name)
     );
     if let Some(a) = asn {
-        let _ = write!(o, ",{a}");
+        let _ = write!(o, ",{}", csv_field(a));
     }
     for f in &ctx.fields {
         o.push(',');

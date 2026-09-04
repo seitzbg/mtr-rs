@@ -455,3 +455,26 @@ fn report_on_exit_text_is_the_plain_report_without_a_start_line() {
     assert!(out.starts_with("HOST: "), "{out}");
     assert!(!out.contains("Start: "), "report_close() only: {out}");
 }
+
+#[test]
+fn csv_quotes_fields_that_contain_separators_or_quotes() {
+    assert_eq!(mtr::emit::csv::csv_field("plain.example"), "plain.example");
+    assert_eq!(mtr::emit::csv::csv_field("a,b"), "\"a,b\"");
+    assert_eq!(
+        mtr::emit::csv::csv_field("say \"hi\""),
+        "\"say \"\"hi\"\"\""
+    );
+    assert_eq!(mtr::emit::csv::csv_field("two\nlines"), "\"two\nlines\"");
+    assert_eq!(mtr::emit::csv::csv_field("cr\rlf"), "\"cr\rlf\"");
+    // Through the renderer: a PTR record with a comma stays one column.
+    let e = finished_engine(base_cfg());
+    let mut names = NameCache::default();
+    names.insert_name(ip("192.0.2.10"), "evil,host");
+    let out = mtr::emit::csv::render(&ctx(&e, &names, false), 0);
+    let row = out.lines().nth(3).unwrap();
+    assert!(row.contains(",\"evil,host\","), "{row}");
+    assert_eq!(
+        row.split(',').count(),
+        out.lines().next().unwrap().split(',').count() + 1
+    );
+}
