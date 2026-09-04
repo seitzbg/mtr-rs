@@ -1,6 +1,7 @@
 [package]
 name = "mtr"
 description = "mtr - a network diagnostic tool (Rust port)"
+homepage = "https://github.com/seitzbg/mtr-rs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -53,6 +54,10 @@ section = "net"
 priority = "optional"
 depends = "$auto, libcap2-bin"  # postinst runs setcap(8)
 conflicts = "mtr, mtr-tiny"
+# It owns /usr/bin/mtr and /usr/bin/mtr-packet, so it stands in for the distro packages
+# (Provides) and takes over their files (Replaces) as well as conflicting with them.
+provides = "mtr, mtr-tiny"
+replaces = "mtr, mtr-tiny"
 maintainer-scripts = "../../packaging/debian"
 assets = [
     ["target/release/mtr", "usr/bin/", "755"],

@@ -23,11 +23,11 @@ jobs:
       - run: cargo test --workspace
         env:
           INSTA_UPDATE: "no"
-      - name: Packaging tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcap2-bin dpkg-dev
-          cargo install cargo-deb --locked
+      # dpkg-deb (used by check-deb.sh) is in the base `dpkg` package; cargo-deb builds the
+      # .deb itself, so no dpkg-dev, and nothing in this job calls setcap, so no libcap2-bin.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
       - run: cargo build --release --workspace
       - name: Generate the man pages and completions install.sh installs
         run: cargo xtask dist --no-build

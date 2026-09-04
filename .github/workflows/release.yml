@@ -37,8 +37,9 @@ jobs:
             echo "tag v$tag does not match workspace version $version" >&2
             exit 1
           fi
-      - run: sudo apt-get update && sudo apt-get install -y libcap2-bin dpkg-dev
-      - run: cargo install cargo-deb --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
       - name: Build the distribution layout
         run: |
           cargo xtask dist | tail -1 > dist-dir.txt
@@ -62,7 +63,7 @@ jobs:
           name: mtr-rs-${{ matrix.arch }}
           path: out/*
       - name: Upload to the GitHub release
-        if: github.event_name == 'push' || inputs.dry_run != 'true'
+        if: startsWith(github.ref, 'refs/tags/') && (github.event_name == 'push' || inputs.dry_run != 'true')
         uses: softprops/action-gh-release@v2
         with:
           files: out/*

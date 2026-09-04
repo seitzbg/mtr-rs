@@ -9,6 +9,9 @@ if ! command -v cargo-deb >/dev/null 2>&1; then
   exit 0
 fi
 cargo xtask dist --no-build >/dev/null
+# `cargo deb --no-build` warns "... will not be built" for each asset outside target/release
+# (the man pages, completions and the example config): it cannot know they were produced by
+# `cargo xtask dist` just above rather than by a cargo build. The warnings are expected.
 deb=$(cargo deb -p mtr --no-build | tail -1)
 [ -f "$deb" ] || { echo "cargo deb produced no file" >&2; exit 1; }
 echo "built $deb"
@@ -30,6 +33,9 @@ done
 info=$(dpkg-deb -I "$deb")
 grep -q '^ Package: mtr-rs$' <<<"$info" || { echo "package name is not mtr-rs" >&2; exit 1; }
 grep -q '^ Conflicts: mtr, mtr-tiny$' <<<"$info" || { echo "Conflicts missing" >&2; exit 1; }
+grep -q '^ Provides: mtr, mtr-tiny$' <<<"$info" || { echo "Provides missing" >&2; exit 1; }
+grep -q '^ Replaces: mtr, mtr-tiny$' <<<"$info" || { echo "Replaces missing" >&2; exit 1; }
+grep -q '^ Homepage: https://github.com/seitzbg/mtr-rs$' <<<"$info" || { echo "Homepage missing" >&2; exit 1; }
 grep -q '^ Section: net$' <<<"$info" || { echo "Section is not net" >&2; exit 1; }
 grep -qE '^ Depends: .*libc6' <<<"$info" || { echo "Depends not auto-computed" >&2; exit 1; }
 grep -qE '^ Depends: .*libcap2-bin' <<<"$info" || { echo "Depends lacks libcap2-bin (postinst needs setcap)" >&2; exit 1; }
