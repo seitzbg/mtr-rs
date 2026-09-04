@@ -1,0 +1,13 @@
+Start: 2026-09-04T21:19:24+0000
+HOST: bseitz-spark1                                                    Loss%   Snt   Last   Avg  Best  Wrst StDev
+  1. AS???         core1-vl100.fiber.house                             0.00%     5    0.8   0.5   0.2   0.8   0.3
+  2. AS???         fw1.fiber.house                                     0.00%     5    1.0   0.8   0.1   1.2   0.4
+  3. AS???         ???                                               100.00%     5    0.0   0.0   0.0   0.0   0.0
+  4. AS???         ???                                               100.00%     5    0.0   0.0   0.0   0.0   0.0
+  5. AS701         ae210.2019.FTWSPAFW-MSE01-AA-IE1.verizon-gni.net    0.00%     5    4.9  10.5   4.9  16.8   5.9
+  6. AS???         lag-1.NWRKNJMD-PPR02-CC.ALTER.NET                  80.00%     5    7.3   7.3   7.3   7.3   0.0
+  7. AS701         customer.alter.net                                  0.00%     5    7.9   8.9   7.9  11.4   1.4
+  8. AS???         po4011.asw03.lga1.tfbnw.net                         0.00%     5   11.4   8.7   7.4  11.4   1.6
+  9. AS32934       usw02.lga3.tfbnw.net                                0.00%     5    8.3   8.8   7.9   9.5   0.7
+ 10. AS???         163.77.193.186                                      0.00%     5   11.0  12.3  11.0  16.0   2.1
+ 11. AS32934       edge-star-mini-shv-03-lga3.facebook.com             0.00%     5    9.2   9.2   7.9  10.5   0.9
