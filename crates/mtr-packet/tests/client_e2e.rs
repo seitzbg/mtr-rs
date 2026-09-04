@@ -4,11 +4,11 @@ use std::path::Path;
 use std::process::Command;
 
 fn our_helper() -> &'static str {
-    env!("CARGO_BIN_EXE_mtr-packet")
+    env!("CARGO_BIN_EXE_mtr-rs-packet")
 }
 
 fn our_client() -> std::path::PathBuf {
-    Path::new(our_helper()).with_file_name("mtr")
+    Path::new(our_helper()).with_file_name("mtr-rs")
 }
 
 fn run(mut c: Command) -> (Option<i32>, String, String) {

@@ -24,7 +24,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// copy named by `MTR_PACKET_UNDER_TEST`.
 fn helper_path() -> String {
     std::env::var("MTR_PACKET_UNDER_TEST")
-        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_mtr-packet").to_string())
+        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_mtr-rs-packet").to_string())
 }
 
 /// Owns the child for the whole test. `std::process::Child::drop` does *not* kill, so without

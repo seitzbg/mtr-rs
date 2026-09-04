@@ -23,7 +23,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Render mtr.8 (from clap) and copy mtr-packet.8 into --out (default target/dist/man)
+    /// Render mtr-rs.8 (from clap) and copy mtr-rs-packet.8 into --out (default target/dist/man)
     Man {
         #[arg(long)]
         out: Option<PathBuf>,
@@ -84,13 +84,13 @@ pub fn man_date() -> String {
         .to_string()
 }
 
-/// `mtr.8` rendered from the client's clap definition.
+/// `mtr-rs.8` rendered from the client's clap definition.
 pub fn render_man(cmd: clap::Command) -> Vec<u8> {
     // `Args` disables the `--version` flag but clap still needs a version string set on the
     // `Command` for clap_mangen to emit a VERSION section (and fold it into SOURCE).
     let cmd = cmd.version(version());
     let man = clap_mangen::Man::new(cmd)
-        .title("mtr")
+        .title(mtr::cli::PROGRAM)
         .section("8")
         .date(man_date())
         .source(format!("mtr-rs {}", version()))
@@ -104,8 +104,8 @@ pub fn render_man(cmd: clap::Command) -> Vec<u8> {
 pub fn render_completion(shell: Shell) -> (String, Vec<u8>) {
     let mut cmd = mtr::cli::Args::command();
     let mut buf = Vec::new();
-    clap_complete::generate(shell, &mut cmd, "mtr", &mut buf);
-    (shell.file_name("mtr"), buf)
+    clap_complete::generate(shell, &mut cmd, mtr::cli::PROGRAM, &mut buf);
+    (shell.file_name(mtr::cli::PROGRAM), buf)
 }
 
 fn write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
@@ -118,10 +118,13 @@ fn write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 }
 
 fn man(out: &Path) -> anyhow::Result<()> {
-    write(&out.join("mtr.8"), &render_man(mtr::cli::Args::command()))?;
-    let helper = repo_root().join("docs/man/mtr-packet.8");
+    write(
+        &out.join("mtr-rs.8"),
+        &render_man(mtr::cli::Args::command()),
+    )?;
+    let helper = repo_root().join("docs/man/mtr-rs-packet.8");
     let text = fs::read(&helper).with_context(|| format!("read {}", helper.display()))?;
-    write(&out.join("mtr-packet.8"), &text)?;
+    write(&out.join("mtr-rs-packet.8"), &text)?;
     println!("{}", out.display());
     Ok(())
 }
@@ -149,7 +152,7 @@ fn dist(no_build: bool) -> anyhow::Result<()> {
     }
     let dist = root.join("target/dist").join(dist_dir_name());
     let _ = fs::remove_dir_all(&dist);
-    for bin in ["mtr", "mtr-packet"] {
+    for bin in ["mtr-rs", "mtr-rs-packet"] {
         let from = root.join("target/release").join(bin);
         let to = dist.join("bin").join(bin);
         fs::create_dir_all(to.parent().unwrap())?;
@@ -210,13 +213,13 @@ mod tests {
         // the `roff` crate's fixed apostrophe preamble before the `.TH` control line, so this
         // checks containment rather than a literal prefix; see task-1-report.md.
         assert!(
-            page.contains(".TH mtr 8"),
+            page.contains(".TH mtr-rs 8"),
             "{}",
             &page[..page.len().min(160)]
         );
         let th_line = page
             .lines()
-            .find(|line| line.starts_with(".TH mtr 8"))
+            .find(|line| line.starts_with(".TH mtr-rs 8"))
             .expect(".TH line missing");
         let date_field = th_line
             .split_whitespace()
@@ -243,9 +246,9 @@ mod tests {
     #[test]
     fn completions_are_named_per_shell_and_mention_the_binary() {
         for (shell, name) in [
-            (Shell::Bash, "mtr.bash"),
-            (Shell::Zsh, "_mtr"),
-            (Shell::Fish, "mtr.fish"),
+            (Shell::Bash, "mtr-rs.bash"),
+            (Shell::Zsh, "_mtr-rs"),
+            (Shell::Fish, "mtr-rs.fish"),
         ] {
             let (file, body) = render_completion(shell);
             assert_eq!(file, name);
@@ -256,10 +259,10 @@ mod tests {
 
     #[test]
     fn the_helper_man_page_is_shipped_from_docs() {
-        let src = repo_root().join("docs/man/mtr-packet.8");
+        let src = repo_root().join("docs/man/mtr-rs-packet.8");
         let text = std::fs::read_to_string(&src).unwrap();
         assert!(text.starts_with(".\\\" GPL-2.0-only"));
-        assert!(text.contains(".TH MTR-PACKET 8"));
+        assert!(text.contains(".TH MTR-RS-PACKET 8"));
         assert!(text.contains("send-probe") && text.contains("check-support"));
     }
 
@@ -300,17 +303,17 @@ mod tests {
         // A pre-existing file under `to` that isn't in `from` must not survive the mirror.
         fs::create_dir_all(&to).unwrap();
         write(&to.join("leftover.8"), b"leftover").unwrap();
-        write(&from.join("mtr.8"), b"man page body").unwrap();
-        write(&from.join("mtr-packet.8"), b"helper man page body").unwrap();
+        write(&from.join("mtr-rs.8"), b"man page body").unwrap();
+        write(&from.join("mtr-rs-packet.8"), b"helper man page body").unwrap();
 
         mirror_flat(&from, &to).unwrap();
 
         assert_eq!(
-            fs::read_to_string(to.join("mtr.8")).unwrap(),
+            fs::read_to_string(to.join("mtr-rs.8")).unwrap(),
             "man page body"
         );
         assert_eq!(
-            fs::read_to_string(to.join("mtr-packet.8")).unwrap(),
+            fs::read_to_string(to.join("mtr-rs-packet.8")).unwrap(),
             "helper man page body"
         );
         assert!(!to.join("leftover.8").exists(), "stale file not removed");

@@ -7,7 +7,7 @@ fn fake_helper() -> String {
 /// Every spawned binary starts from the same neutral environment: no `$MTR_OPTIONS`, and a config
 /// directory that cannot exist, so a developer's own ~/.config/mtr-rs/config.toml never leaks in.
 fn isolated() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_mtr"));
+    let mut c = Command::new(env!("CARGO_BIN_EXE_mtr-rs"));
     c.env_remove("MTR_OPTIONS")
         .env("XDG_CONFIG_HOME", "/nonexistent/mtr-rs-tests");
     c
@@ -79,12 +79,12 @@ fn wide_report_json_and_csv_with_the_fake_helper() {
 
 #[test]
 fn missing_helper_is_a_clear_fatal_error() {
-    // helper::candidates_from() tries $MTR_PACKET, then `mtr-packet` on $PATH, then
-    // `<dir of current exe>/mtr-packet`, then `./mtr-packet`. The two overrides below
-    // neutralise the first two candidates, but running the `mtr` binary straight out of
-    // `target/debug` would still find the sibling mtr-packet built by the workspace as the
-    // third candidate. Run a copy from an empty temp directory instead, so no sibling
-    // helper exists there either.
+    // helper::candidates_from() tries $MTR_PACKET, then `mtr-rs-packet` on $PATH, then
+    // `<dir of current exe>/mtr-rs-packet`, then `./mtr-rs-packet`, and finally the C
+    // `mtr-packet` on $PATH. The two overrides below neutralise $MTR_PACKET and both $PATH
+    // candidates, but running the `mtr-rs` binary straight out of `target/debug` would still
+    // find the sibling mtr-rs-packet built by the workspace as the third candidate. Run a copy
+    // from an empty temp directory instead, so no sibling helper exists there either.
     let dir = std::env::temp_dir().join(format!(
         "mtr-e2e-missing-helper-{}-{}",
         std::process::id(),
@@ -94,18 +94,18 @@ fn missing_helper_is_a_clear_fatal_error() {
             .as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    let mtr_copy = dir.join("mtr");
-    std::fs::copy(env!("CARGO_BIN_EXE_mtr"), &mtr_copy).unwrap();
+    let mtr_copy = dir.join("mtr-rs");
+    std::fs::copy(env!("CARGO_BIN_EXE_mtr-rs"), &mtr_copy).unwrap();
 
     let mut c = Command::new(&mtr_copy);
     c.env_remove("MTR_OPTIONS")
         .env("XDG_CONFIG_HOME", "/nonexistent/mtr-rs-tests")
-        .env("MTR_PACKET", "/nonexistent/mtr-packet")
+        .env("MTR_PACKET", "/nonexistent/mtr-rs-packet")
         .env("PATH", "/nonexistent");
     let (code, out, err) = run(c.arg("-r").args(FAST));
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(code, Some(1));
-    assert!(err.contains("mtr-packet not found"), "{err}");
+    assert!(err.contains("mtr-rs-packet not found"), "{err}");
     assert!(
         out.is_empty(),
         "no Start: line on the failure path: {out:?}"

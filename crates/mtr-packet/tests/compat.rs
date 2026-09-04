@@ -43,7 +43,7 @@ fn run_suite(suite: &str, args: &[&str]) -> (bool, String) {
     let out = Command::new(runner())
         .arg(suite)
         .args(args)
-        .env("MTR_PACKET", env!("CARGO_BIN_EXE_mtr-packet"))
+        .env("MTR_PACKET", env!("CARGO_BIN_EXE_mtr-rs-packet"))
         .env("MTR_C_REPO", &repo)
         .output()
         .expect("bash + python3 available");

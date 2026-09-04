@@ -63,10 +63,15 @@ pub async fn run_from_env() -> i32 {
     match cli::build_argv(env_options.as_deref(), std::env::args().skip(1)) {
         Ok(argv) => run(argv).await,
         Err(msg) => {
-            eprintln!("mtr: {msg}");
+            err(&msg);
             1
         }
     }
+}
+
+/// Every diagnostic carries the program name, as C's `error()` does.
+fn err(msg: impl std::fmt::Display) {
+    eprintln!("{}: {msg}", cli::PROGRAM);
 }
 
 /// The TUI panic hook is process-wide; installing it per target would nest hooks.
@@ -123,7 +128,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
         let p = match config_file::init_config_target(args.config.as_deref(), sudo_guard) {
             Ok(p) => p,
             Err(msg) => {
-                eprintln!("mtr: config: {msg}");
+                err(format_args!("config: {msg}"));
                 return 1;
             }
         };
@@ -133,7 +138,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
                 0
             }
             Err(msg) => {
-                eprintln!("mtr: config: {msg}");
+                err(format_args!("config: {msg}"));
                 1
             }
         };
@@ -141,7 +146,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
     let cfg_path = match config_file::config_source(args.config.as_deref(), sudo_guard) {
         Ok(p) => p,
         Err(msg) => {
-            eprintln!("mtr: {msg}");
+            err(&msg);
             return 1;
         }
     };
@@ -151,7 +156,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
         match config_file::load(p) {
             Ok(cfg) => config_file::apply(&mut args, &cfg),
             Err(msg) => {
-                eprintln!("mtr: config: {msg}");
+                err(format_args!("config: {msg}"));
                 return 1;
             }
         }
@@ -163,7 +168,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
                 args.hosts = names;
             }
             Err(msg) => {
-                eprintln!("mtr: {msg}");
+                err(&msg);
                 return 1;
             }
         }
@@ -172,7 +177,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
     let opts = match args.into_options(is_root) {
         Ok(o) => o,
         Err(msg) => {
-            eprintln!("mtr: {msg}");
+            err(&msg);
             return 1;
         }
     };
@@ -194,9 +199,9 @@ pub async fn run(argv: Vec<String>) -> i32 {
                 }
                 Err(msg) => {
                     if af != requested && target::resolve_target(&t.name, requested).await.is_ok() {
-                        eprintln!("mtr: multiple report targets must use the same address family");
+                        err("multiple report targets must use the same address family");
                     } else {
-                        eprintln!("mtr: {msg}");
+                        err(&msg);
                     }
                     return 1;
                 }
@@ -216,7 +221,7 @@ pub async fn run(argv: Vec<String>) -> i32 {
                 break;
             }
             Err(Fatal::Skip(msg)) => {
-                eprintln!("mtr: {msg}");
+                err(&msg);
                 if target_failure_is_fatal(opts.mode) {
                     return 1;
                 }
@@ -231,10 +236,13 @@ pub async fn run(argv: Vec<String>) -> i32 {
             // `error(EXIT_FAILURE)`; skipping to the next target there is a small, harmless
             // difference — nothing partial has been printed and the exit status is still 1.
             Err(Fatal::Abort(msg)) => {
-                eprintln!("mtr: {msg}");
+                err(&msg);
                 if msg == helper::fatal_message(&mtr_proto::ResponseKind::PermissionDenied).unwrap()
                 {
-                    eprintln!("mtr: hint: sudo setcap cap_net_raw+ep \"$(command -v mtr-packet)\"");
+                    err(format_args!(
+                        "hint: sudo setcap cap_net_raw+ep \"$(command -v {})\"",
+                        helper::HELPER
+                    ));
                 }
                 if target_failure_is_fatal(opts.mode) {
                     return 1;

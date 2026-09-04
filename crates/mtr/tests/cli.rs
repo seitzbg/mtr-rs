@@ -2,7 +2,7 @@ use std::io::Write as _;
 use std::process::{Command, Stdio};
 
 fn mtr() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_mtr"));
+    let mut c = Command::new(env!("CARGO_BIN_EXE_mtr-rs"));
     // Point the config file at a directory that cannot exist, so these tests never pick up the
     // developer's own ~/.config/mtr-rs/config.toml.
     c.env_remove("MTR_OPTIONS")
@@ -23,7 +23,7 @@ fn run(args: &[&str]) -> (Option<i32>, String, String) {
 fn version_flag() {
     let (code, out, _) = run(&["-v"]);
     assert_eq!(code, Some(0));
-    assert_eq!(out, format!("mtr {}\n", env!("CARGO_PKG_VERSION")));
+    assert_eq!(out, format!("mtr-rs {}\n", env!("CARGO_PKG_VERSION")));
     let (_, out, _) = run(&["-vv"]);
     assert!(out.contains("features:"));
 }
@@ -39,7 +39,7 @@ fn c_validation_messages_reach_stderr_with_exit_one() {
     let (code, _, err) = run(&["-u", "-T", "-r", "127.0.0.1"]);
     assert_eq!(code, Some(1));
     assert!(
-        err.contains("mtr: -u , -T and -S are mutually exclusive"),
+        err.contains("mtr-rs: -u , -T and -S are mutually exclusive"),
         "{err}"
     );
     let (code, _, err) = run(&["-P", "80", "-r", "127.0.0.1"]);
@@ -151,7 +151,7 @@ fn a_malformed_config_file_is_fatal_with_its_path_and_line() {
     let (code, _, err) = run(&["--config", path.to_str().unwrap(), "-r", "127.0.0.1"]);
     assert_eq!(code, Some(1), "{err}");
     assert!(
-        err.starts_with(&format!("mtr: config: {}: ", path.display())),
+        err.starts_with(&format!("mtr-rs: config: {}: ", path.display())),
         "{err}"
     );
     assert!(err.contains("line 3"), "{err}");
@@ -321,7 +321,7 @@ fn a_bad_default_config_is_fatal_too() {
     assert_eq!(o.status.code(), Some(1), "{err}");
     assert!(
         err.contains(&format!(
-            "mtr: config: {}: value out of range (1 - 255): 0",
+            "mtr-rs: config: {}: value out of range (1 - 255): 0",
             path.display()
         )),
         "{err}"

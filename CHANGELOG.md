@@ -6,7 +6,9 @@ All notable changes to mtr-rs are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+- Installed binaries are now `mtr-rs` and `mtr-rs-packet` (man pages, completions and setcap hints follow); the Debian package installs alongside the distribution's mtr and no longer declares Conflicts/Provides/Replaces on `mtr`/`mtr-tiny`. The client looks for `mtr-rs-packet` first and still falls back to a C `mtr-packet` on the path.
+- `--version`, the TUI header and error messages say `mtr-rs`; CSV and JSON output keep the C names.
 
 ## [0.1.0] - 2026-09-04
 

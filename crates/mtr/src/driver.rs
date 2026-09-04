@@ -132,7 +132,7 @@ impl<'a> Driver<'a> {
                         kind: RequestKind::SendProbe(params),
                     })
                     .await
-                    .context("mtr-packet command pipe write failure")?,
+                    .context("mtr-rs-packet command pipe write failure")?,
                 Command::Resolve(ip) => self.request_lookups(ip).await,
                 Command::NextWake(_) => {}
                 Command::Finished => finished = true,

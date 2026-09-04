@@ -13,7 +13,10 @@ pub fn render(view: &View, area: Rect, buf: &mut Buffer) {
     let e = view.engine;
     let cfg = e.config();
     let p = view.palette;
-    let mut spans = vec![Span::styled(format!("mtr {}  ", view.version), p.header())];
+    let mut spans = vec![Span::styled(
+        format!("{} {}  ", crate::cli::PROGRAM, view.version),
+        p.header(),
+    )];
     if area.width >= 100 {
         let local = e
             .local()
@@ -72,7 +75,7 @@ mod tests {
         let l = line(&f, 80);
         assert!(
             l.starts_with(&format!(
-                "mtr {}  →  target.example (192.0.2.10)   ICMP/IPv4  i=1s  Snt 2",
+                "mtr-rs {}  →  target.example (192.0.2.10)   ICMP/IPv4  i=1s  Snt 2",
                 f.version
             )),
             "{l:?}"
@@ -95,7 +98,7 @@ mod tests {
         let mut f = view_fixture();
         f.engine
             .handle(mtr_core::Event::Action(mtr_core::UserAction::Pause), f.now);
-        // 120 columns: 22 (local host) + 66 (mtr … Snt 2) + 10 ("  [PAUSED]") = 98 <= 120 - 9
+        // 120 columns: 22 (local host) + 66 (mtr-rs … Snt 2) + 10 ("  [PAUSED]") = 98 <= 120 - 9
         let l = line(&f, 120);
         assert!(l.contains("[PAUSED]"), "{l:?}");
         assert!(l.ends_with("12:34:56"), "{l:?}");
@@ -110,7 +113,7 @@ mod tests {
         assert_eq!(l.chars().nth(91), Some(' '), "{l:?}");
         // 80 columns: only the first 71 cells of the left segment survive
         let l = line(&f, 80);
-        assert!(l.starts_with("mtr "), "{l:?}");
+        assert!(l.starts_with("mtr-rs "), "{l:?}");
         assert!(!l.contains("[PAUSED]"), "{l:?}");
         assert!(l.ends_with("12:34:56"), "{l:?}");
     }

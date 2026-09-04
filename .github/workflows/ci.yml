@@ -26,7 +26,7 @@ jobs:
           command: check
       - name: Allow unprivileged ping (DGRAM ICMP) sockets
         # GitHub-hosted runners give the job process neither cap_net_raw nor a gid inside
-        # the default ping_group_range ("1 0", i.e. nobody), so mtr-packet's raw-then-DGRAM
+        # the default ping_group_range ("1 0", i.e. nobody), so mtr-rs-packet's raw-then-DGRAM
         # socket-open tests have no fallback available and would otherwise skip. Widening
         # the range lets the DGRAM path actually exercise on CI instead of only locally.
         if: runner.os == 'Linux'
@@ -79,7 +79,7 @@ jobs:
           python-version: "3.x"
       - run: sudo apt-get install -y libcap2-bin
       - run: cargo build --workspace
-      - run: sudo setcap cap_net_raw+ep target/debug/mtr-packet
+      - run: sudo setcap cap_net_raw+ep target/debug/mtr-rs-packet
       - name: Build and empower the upstream raw-ICMP listener
         # packet_listen.c hard-codes SEQUENCE_NUM 33000, but MIN_PORT moved to 33434
         # in mtr 0.96, so patch a scratch copy (see run.sh --listen-seq).
@@ -91,7 +91,7 @@ jobs:
       - name: cmdparse + param (must pass)
         run: tests/compat/run.sh --compare cmdparse param
         env:
-          MTR_PACKET: ${{ github.workspace }}/target/debug/mtr-packet
+          MTR_PACKET: ${{ github.workspace }}/target/debug/mtr-rs-packet
           MTR_C_REPO: ${{ github.workspace }}/mtr-c
           # The listener above was compiled for our MIN_PORT, so param.py's four ids
           # come off the known-divergence list and gate (see run.sh --listen-seq).
@@ -99,5 +99,5 @@ jobs:
       - name: probe (report only, needs the public internet)
         run: tests/compat/run.sh --report-only probe
         env:
-          MTR_PACKET: ${{ github.workspace }}/target/debug/mtr-packet
+          MTR_PACKET: ${{ github.workspace }}/target/debug/mtr-rs-packet
           MTR_C_REPO: ${{ github.workspace }}/mtr-c

@@ -1,4 +1,4 @@
-//! mtr-packet: the privileged probe helper of mtr-rs. Rust port of mtr 0.96's `packet/`
+//! mtr-rs-packet: the privileged probe helper of mtr-rs. Rust port of mtr 0.96's `packet/`
 //! (commit 7b01773). GPL-2.0-only.
 #![forbid(unsafe_code)]
 
@@ -17,6 +17,10 @@ use crate::backend::ProbeBackend;
 use crate::command::{CommandBuffer, Helper};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The installed helper's name, used to prefix its diagnostics. The Rust port installs as
+/// `mtr-rs-packet` so it can live beside mtr 0.96's `mtr-packet`.
+pub const PROGRAM: &str = "mtr-rs-packet";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Fatal {

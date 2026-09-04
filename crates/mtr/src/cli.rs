@@ -10,6 +10,10 @@ use clap::{
 use mtr_core::{Config, MAX_PACKET, MIN_PACKET, fields};
 use mtr_proto::Protocol;
 
+/// The installed client's name, used for `argv[0]`, `--version`, the TUI header and every
+/// diagnostic. The Rust port installs as `mtr-rs` so it can live beside a distribution `mtr`.
+pub const PROGRAM: &str = "mtr-rs";
+
 use crate::config_file::ColorChoice;
 use crate::options::split_mtr_options;
 use crate::tui::palette::RttThresholds;
@@ -178,8 +182,8 @@ pub fn parse_ipinfo_fields(spec: &str) -> Result<Vec<u8>, String> {
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    name = "mtr",
-    about = "mtr - a network diagnostic tool (Rust port)",
+    name = "mtr-rs",
+    about = "mtr-rs - a network diagnostic tool (Rust port of mtr)",
     disable_version_flag = true,
     args_override_self = true
 )]
@@ -657,7 +661,7 @@ pub fn build_argv(
     env_options: Option<&str>,
     args: impl Iterator<Item = String>,
 ) -> Result<Vec<String>, String> {
-    let mut v = vec!["mtr".to_string()];
+    let mut v = vec![PROGRAM.to_string()];
     if let Some(e) = env_options {
         v.extend(split_mtr_options(e)?);
     }
@@ -667,7 +671,7 @@ pub fn build_argv(
 
 /// `print_version()` (ui/mtr.c:357-407).
 pub fn version_text(verbose: u8) -> String {
-    let mut s = format!("mtr {}\n", env!("CARGO_PKG_VERSION"));
+    let mut s = format!("{PROGRAM} {}\n", env!("CARGO_PKG_VERSION"));
     if verbose >= 2 {
         s.push_str("features:\n");
         let features = [
@@ -1034,7 +1038,7 @@ mod tests {
             ["-c".to_string(), "5".to_string(), "h".to_string()].into_iter(),
         )
         .unwrap();
-        assert_eq!(v, ["mtr", "-r", "-c", "3", "-c", "5", "h"]);
+        assert_eq!(v, ["mtr-rs", "-r", "-c", "3", "-c", "5", "h"]);
         let o = Args::try_parse_from(v)
             .unwrap()
             .into_options(false)
@@ -1196,8 +1200,9 @@ mod tests {
     fn version_text_lists_features_when_verbose() {
         assert_eq!(
             version_text(1),
-            format!("mtr {}\n", env!("CARGO_PKG_VERSION"))
+            format!("mtr-rs {}\n", env!("CARGO_PKG_VERSION"))
         );
+        assert!(version_text(1).starts_with("mtr-rs "));
         assert!(version_text(2).contains("  ipv6     yes\n"));
         assert!(version_text(2).contains("  curses   no\n"));
     }
