@@ -59,10 +59,36 @@ files=(
   "$bashdir/mtr-rs" "$zshdir/_mtr-rs" "$fishdir/mtr-rs.fish"
 )
 
+# What this script installed before 0.2 renamed everything to mtr-rs. An upgrade or an
+# uninstall has to clear these too, or a 0.1.x install stays on the system for ever.
+legacy_files=(
+  "$bindir/mtr" "$bindir/mtr-packet"
+  "$mandir/mtr.8" "$mandir/mtr-packet.8"
+  "$bashdir/mtr" "$zshdir/_mtr" "$fishdir/mtr.fish"
+)
+
+# ...but only once "$bindir/mtr" is provably ours. With --prefix /usr that path is the
+# distribution's C mtr, and deleting it would break the system. 0.1.x is the only release this
+# project ever shipped under the name and the C client reports 0.9x, so the version line settles
+# it; no mtr there at all means there is nothing to clean up.
+remove_legacy() {
+  local version f
+  [ -e "$bindir/mtr" ] || return 0
+  version=$("$bindir/mtr" --version 2>/dev/null | head -n 1) || version=
+  case "$version" in
+    "mtr 0.1."*) ;;
+    *) echo "left $bindir/mtr alone: not a 0.1.x install of this project"; return 0 ;;
+  esac
+  for f in "${legacy_files[@]}"; do
+    if [ -e "$f" ]; then rm -f "$f"; echo "removed $f (pre-0.2 install)"; fi
+  done
+}
+
 if [ "$uninstall" = 1 ]; then
   for f in "${files[@]}"; do
     if [ -e "$f" ]; then rm -f "$f"; echo "removed $f"; fi
   done
+  remove_legacy
   exit 0
 fi
 
@@ -88,6 +114,9 @@ else
     [ -f "$f" ] || { echo "install.sh: missing $f -- generate it first (as yourself, not root): cargo xtask dist" >&2; exit 1; }
   done
 fi
+
+# Upgrading from 0.1.x: clear the old names before writing the new ones.
+remove_legacy
 
 install -d "$bindir" "$mandir" "$bashdir" "$zshdir" "$fishdir"
 install -m 755 "$root/target/release/mtr-rs" "$bindir/mtr-rs"
