@@ -44,6 +44,10 @@ jobs:
         run: |
           cargo xtask dist | tail -1 > dist-dir.txt
           cat dist-dir.txt
+      - name: Allow unprivileged ping (DGRAM ICMP) sockets
+        # The sanity check below runs mtr-packet without cap_net_raw; GitHub runners default
+        # ping_group_range to "1 0", which leaves the helper no socket to open at all.
+        run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
       - name: Sanity-check the binaries
         run: |
           "$(cat dist-dir.txt)/bin/mtr" --version
