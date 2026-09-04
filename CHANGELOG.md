@@ -17,6 +17,7 @@ All notable changes to mtr-rs are documented here. The format follows
 - AS lookups treat only `64:ff9b::/96` as NAT64 (C checks 32 bits; deviation 33, CR-09).
 ### Security
 - `MTR_RS_LOG` is ignored when `/etc/mtr.is.run.under.sudo` exists and never truncates or follows an existing file (CR-01).
+- GitHub Actions pinned to commit SHAs, read-only tokens except the release publish step, and cargo-deny in CI (CR-07).
 
 ## [0.1.0] - Unreleased
 

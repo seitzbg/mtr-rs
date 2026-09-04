@@ -10,8 +10,10 @@ license = "GPL-2.0-only"
 rust-version = "1.85"
 
 [workspace.dependencies]
-mtr-proto = { path = "crates/mtr-proto" }
-mtr-core = { path = "crates/mtr-core" }
+# The `version` is redundant for a path build but keeps these from reading as wildcard
+# dependencies (see deny.toml `[bans] wildcards`), and crates.io would require it anyway.
+mtr-proto = { path = "crates/mtr-proto", version = "0.1.0" }
+mtr-core = { path = "crates/mtr-core", version = "0.1.0" }
 thiserror = "2"
 anyhow = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "signal", "net"] }

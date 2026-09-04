@@ -182,6 +182,8 @@ In `cargo test` only
     INSTA_UPDATE=always cargo test -p mtr --test tui_snapshots   # accept intended screen changes
     MTR_E2E=1 cargo test -p mtr -- --ignored         # real DNS and the installed C helper
 
+    cargo deny check                                 # advisories, licences, sources
+
     cargo xtask man                                  # target/dist/man/{mtr.8,mtr-packet.8}
     cargo xtask completions                          # target/dist/completions/{mtr.bash,_mtr,mtr.fish}
     cargo xtask dist                                 # both, plus a release build, laid out as
