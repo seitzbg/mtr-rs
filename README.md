@@ -135,3 +135,10 @@ User-visible changes go in `CHANGELOG.md` in the same commit; plans in `ROADMAP.
    leading `v`.
 3. The `release` workflow builds x86_64 and aarch64, runs `scripts/check-deb.sh` and attaches the
    tarballs and `.deb`s; `workflow_dispatch` with `dry_run: "true"` skips the release itself.
+
+## Credits
+
+mtr-rs was written by Bryan Seitz with assistance from Claude (Anthropic). It is a port of
+[mtr](https://github.com/traviscross/mtr), created by Matt Kimball, maintained for many years by
+Roger Wolff and now by Travis Cross and the mtr contributors; the protocol, the probe engine and the
+report formats are theirs. Both projects are GPL-2.0-only.
