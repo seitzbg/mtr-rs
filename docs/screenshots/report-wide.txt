@@ -1,7 +1,7 @@
 Start: 2026-09-04T21:19:24+0000
 HOST: bseitz-spark1                                                    Loss%   Snt   Last   Avg  Best  Wrst StDev
-  1. AS???         core1-vl100.fiber.house                             0.00%     5    0.8   0.5   0.2   0.8   0.3
-  2. AS???         fw1.fiber.house                                     0.00%     5    1.0   0.8   0.1   1.2   0.4
+  1. AS???         core1-vl100                                         0.00%     5    0.8   0.5   0.2   0.8   0.3
+  2. AS???         fw1                                                 0.00%     5    1.0   0.8   0.1   1.2   0.4
   3. AS???         ???                                               100.00%     5    0.0   0.0   0.0   0.0   0.0
   4. AS???         ???                                               100.00%     5    0.0   0.0   0.0   0.0   0.0
   5. AS701         ae210.2019.FTWSPAFW-MSE01-AA-IE1.verizon-gni.net    0.00%     5    4.9  10.5   4.9  16.8   5.9
