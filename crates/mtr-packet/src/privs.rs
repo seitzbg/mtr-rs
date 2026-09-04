@@ -25,6 +25,12 @@ pub fn drop_all() -> Result<(), Fatal> {
     let keep_net_admin = has_net_admin();
     let cap_err =
         |e: caps::errors::CapsError| Fatal::Message(format!("Failed to drop capabilities: {e}"));
+    // Ambient first, and explicitly: the kernel does drop it as a side effect of clearing
+    // Inheritable (`cap_capset()` intersects ambient with inheritable ∩ permitted), but that
+    // makes a security property depend on the order of the two calls below. `capset` on the
+    // ambient set is `prctl(PR_CAP_AMBIENT_CLEAR_ALL)`, unsupported before Linux 4.3 and
+    // inside some sandboxes, so a failure here is not fatal — the clears below still cover it.
+    let _ = caps::clear(None, CapSet::Ambient);
     caps::clear(None, CapSet::Inheritable).map_err(cap_err)?;
     let mut keep = caps::CapsHashSet::new();
     if keep_net_admin {

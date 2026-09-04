@@ -114,6 +114,13 @@ fn the_running_helper_holds_no_capabilities_beyond_a_granted_net_admin() {
         "0000000000000000",
         "CapInh of {path} is not empty"
     );
+    // The ambient set is cleared explicitly in `drop_all()`; a non-empty one would survive an
+    // `execve` of an unprivileged binary, so assert it in both modes.
+    assert_eq!(
+        value_of("CapAmb"),
+        "0000000000000000",
+        "CapAmb of {path} is not empty"
+    );
     let expect_net_admin = std::env::var("MTR_PACKET_EXPECT_NET_ADMIN").is_ok_and(|v| v == "1");
     for want in ["CapEff", "CapPrm"] {
         let value = value_of(want);
