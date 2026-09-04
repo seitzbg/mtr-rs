@@ -51,19 +51,21 @@ jobs:
         run: scripts/check-deb.sh
 
   # The upstream Python helper suites (test/{cmdparse,param,probe}.py from the C repo)
-  # run against our helper. GitHub runners have no installed C `mtr-packet`, so the
-  # wrapper's ours-vs-baseline comparison has no baseline to cancel environmental
-  # failures against ("baseline: n/a") and every failure of ours counts. We therefore
-  # split the suites by how much signal they can carry on a bare runner:
+  # run against our helper. The runner image ships a C `mtr-packet` at the wrapper's
+  # default /usr/bin/mtr-packet, so the ours-vs-baseline comparison does cancel
+  # environmental failures and only failures that are ours alone gate. We still split
+  # the suites by how much signal each can carry on a runner:
   #   * cmdparse.py (TestCommandParse, which the wrapper selects) is hermetic — command
   #     parsing only, no network, no privilege — and param.py is local (127.0.0.1/::1
   #     against the raw-ICMP listener we build and setcap below, rebuilt at MIN_PORT so
   #     it is not on the known-divergence list). Both gate: `--compare` fails the job on
   #     any failure of ours.
   #   * probe.py gates too, on its IPv4 cases: they need the public internet (8.8.8.8),
-  #     which runners have, and three consecutive runs of the compare step passed. Its
-  #     remote IPv6 cases (Google's IPv6 DNS) are skipped by upstream's HAVE_IPV6 probe
-  #     because GitHub runners have no IPv6, so they only run locally on a dual-stack box.
+  #     which runners have, and three consecutive runs of the compare step passed with
+  #     no ours-only failures. Its remote IPv6 cases (Google's IPv6 DNS) are skipped by
+  #     upstream's HAVE_IPV6 probe because GitHub runners have no IPv6, so they only run
+  #     locally on a dual-stack box. Should a runner's network make this flaky, put the
+  #     step back on --report-only rather than masking a real failure.
   helper-compat:
     runs-on: ubuntu-latest
     needs: test
