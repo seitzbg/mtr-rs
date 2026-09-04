@@ -23,6 +23,18 @@ jobs:
       - run: cargo test --workspace
         env:
           INSTA_UPDATE: "no"
+      # dpkg-deb (used by check-deb.sh) is in the base `dpkg` package; cargo-deb builds the
+      # .deb itself, so no dpkg-dev, and nothing in this job calls setcap, so no libcap2-bin.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+      - run: cargo build --release --workspace
+      - name: Generate the man pages and completions install.sh installs
+        run: cargo xtask dist --no-build
+      - name: install.sh round-trip
+        run: scripts/tests/install-roundtrip.sh
+      - name: Build and check the .deb
+        run: scripts/check-deb.sh
 
   # The upstream Python helper suites (test/{cmdparse,param,probe}.py from the C repo)
   # run against our helper. GitHub runners have no installed C `mtr-packet`, so the

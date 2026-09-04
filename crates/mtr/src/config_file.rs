@@ -228,6 +228,21 @@ fn toml_message(text: &str, e: &toml::de::Error) -> String {
     format!("{} at line {line} column {column}", e.message())
 }
 
+/// Where `--init-config` writes: the explicit `--config` path or the XDG default. Refused under
+/// the sudo guard (the helper file /etc/mtr.is.run.under.sudo) like `--config` and `-F`, since
+/// creating files as root at a caller-chosen or `$HOME`-derived path is exactly what the guard
+/// prevents.
+pub fn init_config_target(explicit: Option<&str>, guard_present: bool) -> Result<PathBuf, String> {
+    if guard_present {
+        return Err("--init-config is disabled under sudo.".to_string());
+    }
+    match explicit {
+        Some(p) => Ok(PathBuf::from(p)),
+        None => default_path()
+            .ok_or_else(|| "no path: set $HOME or $XDG_CONFIG_HOME, or pass --config".to_string()),
+    }
+}
+
 /// `--init-config`: create the parent directories and write [`TEMPLATE`], refusing to touch an
 /// existing file. The message is path-prefixed like [`load`]'s.
 pub fn init(path: &Path) -> Result<(), String> {
@@ -480,6 +495,22 @@ asn = true
             "--config is disabled under sudo."
         );
         assert_eq!(config_source(None, true).unwrap(), None);
+    }
+
+    #[test]
+    fn init_config_target_refuses_under_sudo_and_explains_no_path() {
+        assert_eq!(
+            init_config_target(None, true).unwrap_err(),
+            "--init-config is disabled under sudo."
+        );
+        assert_eq!(
+            init_config_target(Some("/tmp/x.toml"), true).unwrap_err(),
+            "--init-config is disabled under sudo."
+        );
+        assert_eq!(
+            init_config_target(Some("/tmp/x.toml"), false).unwrap(),
+            PathBuf::from("/tmp/x.toml")
+        );
     }
 
     #[test]

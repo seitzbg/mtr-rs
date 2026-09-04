@@ -1,0 +1,82 @@
+.\" GPL-2.0-only
+.\" mtr-rs: man page for the privileged probe helper.
+.TH MTR-PACKET 8 "2026-09-04" "mtr-rs" "System Administration"
+.SH NAME
+mtr-packet \- send network probes for mtr and report the replies
+.SH SYNOPSIS
+.B mtr-packet
+.SH DESCRIPTION
+.B mtr-packet
+is the privileged half of
+.BR mtr (8).
+It is started by the unprivileged client, reads one command per line on
+standard input and writes one reply per line on standard output. It opens
+its raw sockets first, drops every privilege (setgid, setuid, and all
+capability sets), and only then starts serving. It exits when standard input
+is closed and no probe is outstanding.
+.PP
+The line protocol is that of mtr 0.96: a request is
+.IR "token command [key value]..." ,
+where
+.I token
+is an integer echoed back in the reply. The commands are
+.B check-support
+(with
+.BR "feature version" ", " ip-4 ", " ip-6 ", " send-probe ", " icmp ", " udp ", " tcp ", " sctp " or " mark ;
+the reply is
+.BR "feature-support support ok" ,
+.BR no ,
+or the version string) and
+.B send-probe
+(with
+.BR "ip-4 ADDR" " or " "ip-6 ADDR" ,
+and optionally
+.BR "protocol icmp|udp|tcp|sctp" ", " "port N" ", " "local-port N" ", "
+.BR "local-ip ADDR" ", " "local-device NAME" ", " "ttl N" ", " "size N" ", "
+.BR "bit-pattern N" ", " "tos N" ", " "timeout SECONDS" ", " "mark N" ).
+Probe replies are
+.BR reply ", " ttl-expired " or " no-route-host ,
+each followed by
+.BR "ip-4|ip-6 ADDR round-trip-time MICROSECONDS"
+and, when the router attached RFC 4950 MPLS objects,
+.BR "mpls label,tc,s,ttl[,...]" .
+A probe that gets no answer within its timeout yields
+.BR no-reply .
+Errors are reported by name
+.RB ( invalid-argument ", " probes-exhausted ", " permission-denied ", "
+.BR address-in-use ", " address-not-available ", " network-down ", "
+.BR host-down ", " no-route-network ", " no-route-host ", "
+.BR unexpected-error " errno N)."
+A malformed line is answered
+.B 0 command-parse-error
+and an overlong one
+.BR "0 command-buffer-overflow" .
+.SH PRIVILEGES
+Raw sockets need
+.B CAP_NET_RAW
+(install with
+.BR "setcap cap_net_raw+ep /usr/bin/mtr-packet" ).
+Without it
+.B mtr-packet
+falls back to unprivileged ICMP and UDP datagram sockets with
+.BR IP_RECVERR ;
+echo replies and time-exceeded errors are still reported, but MPLS labels
+are not available on that path and TCP/SCTP probes cannot see intermediate
+hops.
+.SH FILES
+.TP
+.I /etc/mtr.is.run.under.sudo
+When present, the
+.BR mtr (8)
+client ignores
+.B $MTR_PACKET
+and refuses
+.BR \-F " and " \-\-config ,
+so that a sudoers rule permitting
+.B mtr
+cannot be used to read or execute arbitrary paths.
+.SH SEE ALSO
+.BR mtr (8)
+.SH AUTHORS
+mtr-rs is a Rust port of mtr by Matt Kimball, Roger Wolff and others; the
+protocol and behaviour follow mtr 0.96.

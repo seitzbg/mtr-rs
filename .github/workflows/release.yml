@@ -1,0 +1,70 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build the artifacts but do not create or upload a release ("true"/"false")
+        type: string
+        default: "true"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+            debarch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            debarch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check the tag matches the workspace version
+        if: github.event_name == 'push'
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$version" != "$tag" ]; then
+            echo "tag v$tag does not match workspace version $version" >&2
+            exit 1
+          fi
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+      - name: Build the distribution layout
+        run: |
+          cargo xtask dist | tail -1 > dist-dir.txt
+          cat dist-dir.txt
+      - name: Sanity-check the binaries
+        run: |
+          "$(cat dist-dir.txt)/bin/mtr" --version
+          printf '1 check-support feature version\n' | "$(cat dist-dir.txt)/bin/mtr-packet"
+      - name: Build and check the .deb
+        run: scripts/check-deb.sh
+      - name: Assemble artifacts
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          mkdir -p out
+          dir="mtr-rs-${version}-${{ matrix.arch }}"
+          tar -C target/dist -czf "out/${dir}.tar.gz" "$dir"
+          cp target/debian/mtr-rs_${version}-1_${{ matrix.debarch }}.deb out/
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mtr-rs-${{ matrix.arch }}
+          path: out/*
+      - name: Upload to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/') && (github.event_name == 'push' || inputs.dry_run != 'true')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true

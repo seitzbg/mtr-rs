@@ -86,19 +86,15 @@ pub async fn run(argv: Vec<String>) -> i32 {
         return 0;
     }
     let sudo_guard = helper::sudo_guard_present();
-    let cfg_path = match config_file::config_source(args.config.as_deref(), sudo_guard) {
-        Ok(p) => p,
-        Err(msg) => {
-            eprintln!("mtr: {msg}");
-            return 1;
-        }
-    };
     if args.init_config {
-        let Some(p) = &cfg_path else {
-            eprintln!("mtr: config: no path: set $HOME or $XDG_CONFIG_HOME, or pass --config");
-            return 1;
+        let p = match config_file::init_config_target(args.config.as_deref(), sudo_guard) {
+            Ok(p) => p,
+            Err(msg) => {
+                eprintln!("mtr: config: {msg}");
+                return 1;
+            }
         };
-        return match config_file::init(p) {
+        return match config_file::init(&p) {
             Ok(()) => {
                 println!("{}", p.display());
                 0
@@ -109,6 +105,13 @@ pub async fn run(argv: Vec<String>) -> i32 {
             }
         };
     }
+    let cfg_path = match config_file::config_source(args.config.as_deref(), sudo_guard) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("mtr: {msg}");
+            return 1;
+        }
+    };
     // A `None` path means no `$HOME` and no absolute `$XDG_CONFIG_HOME`, i.e. there is no file to
     // read — the same situation as a file that does not exist.
     if let Some(p) = &cfg_path {

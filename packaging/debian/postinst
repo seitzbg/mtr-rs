@@ -1,0 +1,13 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Grant the raw-socket capability the way Debian's own mtr package does. Failure is not fatal:
+# mtr-packet works on its unprivileged fallback without it.
+set -e
+if [ "$1" = "configure" ]; then
+    if command -v setcap >/dev/null 2>&1; then
+        setcap cap_net_raw+ep /usr/bin/mtr-packet || echo "mtr-rs: setcap failed; run: setcap cap_net_raw+ep /usr/bin/mtr-packet" >&2
+    else
+        echo "mtr-rs: setcap not found (install libcap2-bin) — mtr-packet runs unprivileged until: setcap cap_net_raw+ep /usr/bin/mtr-packet" >&2
+    fi
+fi
+exit 0
