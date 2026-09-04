@@ -11,8 +11,8 @@ is the privileged half of
 .BR mtr-rs (8).
 The unprivileged client starts it, writes one command per line on its
 standard input and reads one reply per line from its standard output.
-It opens its raw sockets first, then drops setgid, setuid and its
-capabilities (see
+It opens its raw sockets first, then drops setgid, setuid and every
+capability except a granted CAP_NET_ADMIN (see
 .BR PRIVILEGES )
 before serving the first command. It exits when standard input is closed
 and no probe is outstanding.
