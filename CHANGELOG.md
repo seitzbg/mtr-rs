@@ -13,6 +13,10 @@ All notable changes to mtr-rs are documented here. The format follows
   hand.
 - README: per-platform install steps (Homebrew first for macOS) and a "Checking the install"
   walkthrough covering every probe mode with its expected output.
+- Release integrity: every release now carries a `SHA256SUMS` asset and a GitHub build-provenance
+  attestation for each file (`gh attestation verify <file> --repo seitzbg/mtr-rs`).
+  `scripts/homebrew-formula.sh` reads the checksums from `SHA256SUMS` instead of hashing the
+  tarballs itself, falling back to hashing for releases that predate the file.
 
 ### Changed
 - The declared minimum Rust version is 1.88. The `Cargo.toml` said 1.85, but the config-file

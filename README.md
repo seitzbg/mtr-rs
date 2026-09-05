@@ -54,6 +54,12 @@ sockets are open).
     cargo install --path crates/mtr-packet
     sudo setcap cap_net_raw+ep "$(command -v mtr-rs-packet)"
 
+Every release also carries a `SHA256SUMS` asset and a GitHub build-provenance attestation for
+each file, so a download can be checked against what the release workflow actually built:
+
+    sha256sum -c --ignore-missing SHA256SUMS                 # shasum -a 256 -c on macOS
+    gh attestation verify mtr-rs-0.3.0-x86_64-linux.tar.gz --repo seitzbg/mtr-rs
+
 Neither package declares a conflict with the distribution's `mtr`, so it can stay installed.
 `--uninstall` removes exactly what it installed, given the same `--prefix`. A failing privilege
 grant (`setcap`, or the BSD `chmod u+s` without root) prints the command and exits 0.
@@ -210,9 +216,10 @@ User-visible changes go in `CHANGELOG.md` in the same commit; plans in `ROADMAP.
 2. `git tag v<version> && git push --tags`; the job fails unless the tag is that version with a
    leading `v`.
 3. The `release` workflow builds every platform, runs `scripts/check-deb.sh` and
-   `scripts/build-freebsd-pkg.sh`, and attaches the tarballs, `.deb`s and `.pkg`;
+   `scripts/build-freebsd-pkg.sh`, and attaches the tarballs, `.deb`s and `.pkg` together with a
+   `SHA256SUMS` file and a build-provenance attestation for each asset (`gh attestation verify`);
    `workflow_dispatch` with `dry_run: "true"` skips the release itself.
-4. Its last job regenerates the Homebrew formula from the published tarballs and pushes it to
+4. Its last job regenerates the Homebrew formula from the published `SHA256SUMS` and pushes it to
    [seitzbg/homebrew-mtr-rs](https://github.com/seitzbg/homebrew-mtr-rs). That needs the
    `HOMEBREW_TAP_TOKEN` repository secret: a fine-grained personal access token for the tap
    repository with Contents read and write. Without it the job warns and skips, and

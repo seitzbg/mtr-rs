@@ -10,9 +10,22 @@
 # core `mtr` formula.
 set -euo pipefail
 version=${1:?usage: homebrew-formula.sh VERSION}
-base="https://github.com/seitzbg/mtr-rs/releases/download/v$version"
+# MTR_RS_RELEASE_BASE overrides the download location (a file:// URL works) for testing.
+base=${MTR_RS_RELEASE_BASE:-"https://github.com/seitzbg/mtr-rs/releases/download/v$version"}
 
-sha() { curl -fsSL "$base/mtr-rs-$version-$1.tar.gz" | sha256sum | cut -d' ' -f1; }
+# The checksums come from the release's SHA256SUMS asset, written by the publish job from the
+# same files it uploads. Releases before 0.4 have no SHA256SUMS; for those, hash the tarballs.
+sums=$(curl -fsSL "$base/SHA256SUMS" 2>/dev/null || true)
+sha() {
+  local file="mtr-rs-$version-$1.tar.gz" hash
+  if [ -n "$sums" ]; then
+    hash=$(printf '%s\n' "$sums" | awk -v f="$file" '$2 == f { print $1 }')
+    [ -n "$hash" ] || { echo "SHA256SUMS has no entry for $file" >&2; exit 1; }
+  else
+    hash=$(curl -fsSL "$base/$file" | sha256sum | cut -d' ' -f1)
+  fi
+  printf '%s\n' "$hash"
+}
 arm_mac=$(sha aarch64-macos); x86_mac=$(sha x86_64-macos)
 arm_linux=$(sha aarch64-linux); x86_linux=$(sha x86_64-linux)
 
