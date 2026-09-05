@@ -37,8 +37,8 @@ pub enum Fatal {
 /// unprivileged process that will actually send the probes.
 pub fn run() -> Result<(), Fatal> {
     use std::os::fd::AsFd;
-    #[cfg(target_os = "linux")]
-    let mut backend = backend::linux::LinuxBackend::open_privileged()?;
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    let mut backend = backend::unix::UnixBackend::open_privileged()?;
     #[cfg(target_os = "macos")]
     let mut backend = backend::macos::MacosBackend::open_privileged()?;
     privs::drop_all()?;
@@ -251,13 +251,19 @@ mod tests {
     fn serve_reports_overflow_for_an_endless_line() {
         let (rd, wr) = pipe().unwrap();
         set_nonblocking(rd.as_fd()).unwrap();
-        let big = vec![b'x'; 8192];
-        write(&wr, &big).unwrap();
-        write(&wr, b"\n").unwrap();
-        drop(wr);
+        // Written from another thread: FreeBSD hands a pipe write of `kern.ipc.pipe_mindirect`
+        // (8192) bytes or more straight to the reader and blocks until it has been read, so
+        // writing it here before `serve()` starts reading would deadlock the test.
+        let writer = std::thread::spawn(move || {
+            let big = vec![b'x'; 8192];
+            write(&wr, &big).unwrap();
+            write(&wr, b"\n").unwrap();
+            drop(wr);
+        });
         let mut h = Helper::new(FakeBackend::v4_only());
         let mut out = Vec::new();
         serve(&mut h, rd.as_fd(), &mut out).unwrap();
+        writer.join().unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with("0 command-buffer-overflow\n"), "{text}");
     }

@@ -1,0 +1,8 @@
+@(root,wheel,4755) bin/mtr-rs-packet
+bin/mtr-rs
+share/man/man8/mtr-rs.8.gz
+share/man/man8/mtr-rs-packet.8.gz
+share/bash-completion/completions/mtr-rs
+share/zsh/site-functions/_mtr-rs
+share/fish/vendor_completions.d/mtr-rs.fish
+share/doc/mtr-rs/config.example.toml

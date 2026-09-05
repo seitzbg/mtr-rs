@@ -34,13 +34,20 @@ pub enum HelperError {
 }
 
 /// C prints "Packet type unsupported" for every unsupported feature. Deviation 34: `mark` is
-/// different in kind — the helper is installed but simply lacks `CAP_NET_ADMIN` — so say what
-/// is missing and how to grant it.
+/// different in kind — on Linux the helper is installed but simply lacks `CAP_NET_ADMIN` — so
+/// say what is missing and how to grant it. Elsewhere `SO_MARK` does not exist, and the CLI
+/// already refuses `-M`; this text is for a helper reached some other way.
 fn unsupported_message(feature: Feature) -> String {
     match feature {
-        Feature::Mark => "mtr-rs-packet does not support --mark here: grant it cap_net_admin \
+        Feature::Mark if cfg!(target_os = "linux") => {
+            "mtr-rs-packet does not support --mark here: grant it cap_net_admin \
              (sudo setcap cap_net_raw,cap_net_admin+ep \"$(command -v mtr-rs-packet)\")"
-            .to_string(),
+                .to_string()
+        }
+        Feature::Mark => {
+            "mtr-rs-packet does not support --mark on this platform (SO_MARK is Linux only)"
+                .to_string()
+        }
         f => format!("Packet type unsupported: {}", f.as_str()),
     }
 }
@@ -223,9 +230,10 @@ async fn check(
 
 /// The two ways to let the helper open probe sockets, for the failures that mean it could not:
 /// the `permission-denied` fatal, the startup check (the helper died opening its sockets) and an
-/// unsupported `ip-4`/`ip-6` (that family's socket never opened). Without `cap_net_raw` the helper
-/// falls back to unprivileged DGRAM ICMP, which the kernel only allows to gids inside
-/// `net.ipv4.ping_group_range` — so `setcap` alone is not the whole story.
+/// unsupported `ip-4`/`ip-6` (that family's socket never opened). On Linux, without `cap_net_raw`
+/// the helper falls back to unprivileged DGRAM ICMP, which the kernel only allows to gids inside
+/// `net.ipv4.ping_group_range` — so `setcap` alone is not the whole story. FreeBSD has no
+/// capabilities and no fallback: raw sockets need root, so the helper is installed setuid root.
 pub fn privilege_hint(err: &str) -> Option<String> {
     let socket_failure = err == fatal_message(&ResponseKind::PermissionDenied)?
         || err == HelperError::StartupCheck.to_string()
@@ -234,10 +242,17 @@ pub fn privilege_hint(err: &str) -> Option<String> {
     if !socket_failure {
         return None;
     }
-    Some(format!(
-        "hint: raw sockets need a capability: sudo setcap cap_net_raw+ep \"$(command -v {HELPER})\"\n\
-         hint: or allow unprivileged ICMP for your group: sudo sysctl -w net.ipv4.ping_group_range=\"0 2147483647\""
-    ))
+    if cfg!(target_os = "linux") {
+        Some(format!(
+            "hint: raw sockets need a capability: sudo setcap cap_net_raw+ep \"$(command -v {HELPER})\"\n\
+             hint: or allow unprivileged ICMP for your group: sudo sysctl -w net.ipv4.ping_group_range=\"0 2147483647\""
+        ))
+    } else {
+        Some(format!(
+            "hint: raw sockets need root: sudo chown root \"$(command -v {HELPER})\" && sudo chmod u+s \"$(command -v {HELPER})\"\n\
+             hint: or run mtr-rs itself as root"
+        ))
+    }
 }
 
 /// The replies `handle_reply_errors()` (cmdpipe.c:690-728) treats as fatal, with its messages.
@@ -309,9 +324,14 @@ mod tests {
     #[test]
     fn unsupported_mark_explains_the_missing_capability() {
         // Deviation 34: `mark` is only supported when the helper holds CAP_NET_ADMIN, so the
-        // message has to say how to grant it rather than just "packet type unsupported".
+        // message has to say how to grant it rather than just "packet type unsupported". Off
+        // Linux there is nothing to grant, and the message says so instead.
         let msg = HelperError::Unsupported(Feature::Mark).to_string();
-        assert!(msg.contains("cap_net_admin"), "{msg}");
+        if cfg!(target_os = "linux") {
+            assert!(msg.contains("cap_net_admin"), "{msg}");
+        } else {
+            assert!(msg.contains("Linux only"), "{msg}");
+        }
         assert!(msg.contains("--mark"), "{msg}");
     }
 
@@ -414,12 +434,17 @@ mod tests {
             let hint = privilege_hint(&msg).unwrap_or_else(|| panic!("no hint for {msg:?}"));
             let lines: Vec<&str> = hint.lines().collect();
             assert_eq!(lines.len(), 2, "{hint}");
-            assert!(lines[0].contains("setcap cap_net_raw+ep"), "{hint}");
             assert!(lines[0].contains(HELPER), "{hint}");
-            assert!(
-                lines[1].contains("net.ipv4.ping_group_range=\"0 2147483647\""),
-                "{hint}"
-            );
+            if cfg!(target_os = "linux") {
+                assert!(lines[0].contains("setcap cap_net_raw+ep"), "{hint}");
+                assert!(
+                    lines[1].contains("net.ipv4.ping_group_range=\"0 2147483647\""),
+                    "{hint}"
+                );
+            } else {
+                assert!(lines[0].contains("chmod u+s"), "{hint}");
+                assert!(lines[1].contains("as root"), "{hint}");
+            }
             assert!(lines.iter().all(|l| l.starts_with("hint: ")), "{hint}");
         }
     }

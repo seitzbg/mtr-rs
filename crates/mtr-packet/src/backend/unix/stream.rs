@@ -106,7 +106,9 @@ pub fn open(
 /// `write_set` observes). `poll(2)` is not required to make the same promise: on this kernel a
 /// refused *SCTP* connect (unlike TCP's) reports only `POLLERR`, never `POLLOUT`, on the failed
 /// socket. Treating `POLLERR` as completion too keeps `poll()` matching `select()`'s semantics
-/// for both protocols, rather than spinning forever on the SCTP case.
+/// for both protocols, rather than spinning forever on the SCTP case. FreeBSD marks a failed
+/// connect writable (`sowriteable()` is true whenever `so_error` is set) and may add `POLLHUP`
+/// once both directions are shut; either way `SO_ERROR` below says what happened.
 pub fn check(sock: &Socket) -> Completion {
     let mut fds = [PollFd::new(sock.as_fd(), PollFlags::POLLOUT)];
     match nix::poll::poll(&mut fds, PollTimeout::ZERO) {
@@ -116,7 +118,7 @@ pub fn check(sock: &Socket) -> Completion {
     }
     if !fds[0]
         .revents()
-        .is_some_and(|r| r.intersects(PollFlags::POLLOUT | PollFlags::POLLERR))
+        .is_some_and(|r| r.intersects(PollFlags::POLLOUT | PollFlags::POLLERR | PollFlags::POLLHUP))
     {
         return Completion::Pending;
     }

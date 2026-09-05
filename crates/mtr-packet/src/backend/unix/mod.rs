@@ -1,5 +1,9 @@
-//! Linux backend: raw sockets with the unprivileged DGRAM fallback. Ported from
-//! packet/probe_unix.c (mtr 0.96, commit 7b01773). GPL-2.0-only.
+//! Unix backend (Linux and FreeBSD): raw sockets, plus the unprivileged DGRAM fallback on
+//! Linux. Ported from packet/probe_unix.c (mtr 0.96, commit 7b01773). GPL-2.0-only.
+//!
+//! What differs between the two is confined to `sockets.rs` (which sockets can be opened and
+//! which options exist), `errqueue.rs` (Linux only) and `privs.rs`; the packet construction,
+//! reply parsing, matching and the stream probes are the same code on both.
 //!
 //! UDP destination ports (probe_unix.c:70-84, 96-111): on a raw socket the port lives in the
 //! UDP header we built, so the sockaddr port is 0. On a DGRAM socket the kernel writes the
@@ -14,6 +18,7 @@
 pub mod construct;
 mod datagram;
 pub mod deconstruct;
+#[cfg(target_os = "linux")]
 pub mod errqueue;
 pub mod sockets;
 pub mod stream;
@@ -34,7 +39,7 @@ use deconstruct::parse_icmp4;
 use deconstruct::{Parsed, match_reply};
 use sockets::Family;
 
-pub struct LinuxBackend {
+pub struct UnixBackend {
     pub v4: Option<Family>,
     pub v6: Option<Family>,
     pub sctp: bool,
@@ -46,7 +51,7 @@ pub struct LinuxBackend {
     fatal: Option<Fatal>,
 }
 
-impl LinuxBackend {
+impl UnixBackend {
     /// `init_net_state_privileged()` (probe_unix.c:422-459).
     pub fn open_privileged() -> Result<Self, Fatal> {
         let v4 = Family::open(4);
@@ -59,7 +64,7 @@ impl LinuxBackend {
                 crate::PROGRAM
             )));
         }
-        Ok(LinuxBackend {
+        Ok(UnixBackend {
             v4: v4.ok(),
             v6: v6.ok(),
             sctp: false,
@@ -232,7 +237,7 @@ impl LinuxBackend {
     }
 }
 
-impl ProbeBackend for LinuxBackend {
+impl ProbeBackend for UnixBackend {
     fn ip_version_supported(&self, version: u8) -> bool {
         self.family(version).is_some()
     }
@@ -298,6 +303,7 @@ impl ProbeBackend for LinuxBackend {
                 sockets::Sockets::Raw { recv, .. } => {
                     self.drain_socket(recv, family, table, now, out)
                 }
+                #[cfg(target_os = "linux")]
                 sockets::Sockets::Dgram { icmp, udp } => self
                     .drain_socket(icmp, family, table, now, out)
                     .and_then(|()| self.drain_socket(udp, family, table, now, out)),

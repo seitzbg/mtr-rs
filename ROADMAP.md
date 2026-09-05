@@ -17,6 +17,7 @@ promise of a date.
 ## 2.0
 
 - macOS backend for `mtr-rs-packet`: the `cfg(target_os = "macos")` stub exists, the BPF/raw-socket
-  implementation does not.
+  implementation does not. The FreeBSD port shares the Unix backend; macOS's raw sockets differ
+  (host-order `ip_len`, `IP_BOUND_IF` for the device) so it is not just another `cfg`.
 - A pty-driven end-to-end test of the default (TUI) invocation.
 - Windows client (report modes only) driving a remote or WSL helper.

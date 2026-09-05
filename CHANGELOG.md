@@ -6,7 +6,20 @@ All notable changes to mtr-rs are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- FreeBSD support (x86_64 and aarch64): the helper opens the same raw sockets as on Linux and
+  drops to the invoking user with `setuid()`; `scripts/install.sh` makes it setuid root, and the
+  release ships FreeBSD tarballs and a pkg(8) package (`packaging/freebsd/`). CI runs the whole
+  suite as root in a FreeBSD VM, so the loopback probe tests execute there.
+
+### Changed
+- Release tarballs are named `mtr-rs-<version>-<arch>-<os>.tar.gz` (`...-x86_64-linux`,
+  `...-aarch64-freebsd`); the arch alone no longer identifies a build.
+- `-M`/`--mark` is refused outside Linux with a message saying so, instead of failing later in
+  the helper; `SO_MARK` has no equivalent there. The helper answers a `mark` or `local-device`
+  it cannot honour with `invalid-argument` rather than silently probing without it.
+- The helper's privilege hints name the fix for the running OS: `setcap` and `ping_group_range` on
+  Linux, `chmod u+s` on FreeBSD.
 
 ## [0.2.1] - 2026-09-04
 

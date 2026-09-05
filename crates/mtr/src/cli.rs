@@ -584,7 +584,16 @@ impl Args {
         // 2^32-1 wraps silently. Reject it instead.
         let mark = match self.mark {
             None => 0,
-            Some(m) => u32::try_from(m).map_err(|_| "mark must be between 0 and 4294967295")?,
+            Some(m) => {
+                let m = u32::try_from(m).map_err(|_| "mark must be between 0 and 4294967295")?;
+                // C only compiles `-M` in under `#ifdef SO_MARK` (mtr.c, `getopt` table), i.e.
+                // on Linux; elsewhere the option does not exist. Keep it parseable everywhere so
+                // the config file and MTR_OPTIONS stay portable, and refuse it here with a reason.
+                if !cfg!(target_os = "linux") {
+                    return Err("--mark (SO_MARK) is only supported on Linux".to_string());
+                }
+                m
+            }
         };
         // Deviation 35: C (mtr.c:678-681) parses -c into an int MaxPing with no range check and
         // accepts a negative count; we reject anything outside 0..=INT_MAX. 0 keeps C's
@@ -1004,8 +1013,6 @@ mod tests {
             "192.0.2.1",
             "-I",
             "eth0",
-            "-M",
-            "7",
             "-Z",
             "3",
             "h",
@@ -1014,10 +1021,17 @@ mod tests {
         assert!(!o.config.dns && o.config.show_ips && o.config.mpls);
         assert_eq!(o.source_address, Some("192.0.2.1".parse().unwrap()));
         assert_eq!(o.config.interface.as_deref(), Some("eth0"));
-        assert_eq!(
-            (o.config.mark, o.config.probe_timeout),
-            (7, Duration::from_secs(3))
-        );
+        assert_eq!(o.config.probe_timeout, Duration::from_secs(3));
+        // `-M` is Linux only (SO_MARK); elsewhere it parses and is then refused.
+        let mark = opts(&["-M", "7", "h"]);
+        if cfg!(target_os = "linux") {
+            assert_eq!(mark.unwrap().config.mark, 7);
+        } else {
+            assert_eq!(
+                mark.unwrap_err(),
+                "--mark (SO_MARK) is only supported on Linux"
+            );
+        }
         assert_eq!(
             opts(&["-a", "nope", "h"]).unwrap_err(),
             "invalid local address"
@@ -1131,10 +1145,14 @@ mod tests {
             let err = parse(argv).into_options(true).unwrap_err();
             assert_eq!(err, msg, "{argv:?}");
         }
-        let o = parse(&["-M", "4294967295", "h"])
-            .into_options(true)
-            .unwrap();
-        assert_eq!(o.config.mark, u32::MAX);
+        // The top of the range is accepted (Linux) or refused for being `-M` at all (elsewhere),
+        // but never wrapped.
+        let o = parse(&["-M", "4294967295", "h"]).into_options(true);
+        if cfg!(target_os = "linux") {
+            assert_eq!(o.unwrap().config.mark, u32::MAX);
+        } else {
+            assert!(o.unwrap_err().contains("only supported on Linux"));
+        }
         let o = parse(&["-c", "0", "-U", "1", "h"])
             .into_options(true)
             .unwrap();

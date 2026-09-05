@@ -187,11 +187,18 @@ fn the_config_file_supplies_defaults_the_command_line_still_overrides() {
     // interval 0.5 from the file trips the non-root check, proving the value was applied…
     let path = temp_config("interval", "[probe]\ninterval = 0.5\n");
     let (code, _, err) = run(&["--config", path.to_str().unwrap(), "-r", "127.0.0.1"]);
-    assert_eq!(code, Some(1), "{err}");
-    assert!(
-        err.contains("non-root users cannot request an interval < 1.0"),
-        "{err}"
-    );
+    if nix::unistd::geteuid().is_root() {
+        // …unless the tests run as root (the FreeBSD CI VM does), where a sub-second interval
+        // is allowed and the one-cycle report against loopback simply succeeds.
+        assert_eq!(code, Some(0), "{err}");
+        assert!(!err.contains("interval"), "{err}");
+    } else {
+        assert_eq!(code, Some(1), "{err}");
+        assert!(
+            err.contains("non-root users cannot request an interval < 1.0"),
+            "{err}"
+        );
+    }
     // …and -i 1 on the command line replaces it, so the run gets as far as resolution
     let (_, _, err) = run(&[
         "--config",

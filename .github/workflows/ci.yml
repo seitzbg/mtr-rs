@@ -107,3 +107,31 @@ jobs:
         env:
           MTR_PACKET: ${{ github.workspace }}/target/debug/mtr-rs-packet
           MTR_C_REPO: ${{ github.workspace }}/mtr-c
+
+  # FreeBSD, in a VM on the Ubuntu runner (GitHub has no FreeBSD runners). The VM's shell is
+  # root, so mtr-rs-packet opens real raw sockets and the loopback probe tests run for real
+  # rather than skipping as they do for the unprivileged Linux job. Rust comes from pkg(8):
+  # rustup's FreeBSD support is x86_64 only and `rust-toolchain.toml` only steers rustup, so
+  # the pkg toolchain is what a FreeBSD user gets too. python3 runs the fake helper the
+  # client tests spawn (crates/mtr/tests/fake-mtr-packet.py). aarch64 is release-only (see
+  # release.yml): the emulated VM is too slow for every push.
+  freebsd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: vmactions/freebsd-vm@f0552d3b69211736abd97f02ff3d4674c56b73b1 # v1.5.5
+        with:
+          release: "14.3"
+          mem: 8192
+          cpu: 4
+          prepare: |
+            pkg install -y rust bash python3
+          run: |
+            set -e
+            cargo --version
+            cargo clippy --workspace --all-targets -- -D warnings
+            INSTA_UPDATE=no cargo test --workspace
+            cargo build --release --workspace
+            cargo xtask dist --no-build
+            bash scripts/tests/install-roundtrip.sh
+            sh scripts/build-freebsd-pkg.sh
