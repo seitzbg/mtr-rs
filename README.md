@@ -105,14 +105,17 @@ grant `cap_net_raw` alone, so `--mark` is opt-in:
     sudo setcap cap_net_raw,cap_net_admin+ep "$(command -v mtr-rs-packet)"
 
 When `/etc/mtr.is.run.under.sudo` exists the client ignores `$MTR_PACKET` and `$MTR_RS_LOG`, refuses
-`-F`, `--config` and `--init-config`, and does not read the default config file.
+`-F`, `--config` and `--init-config`, does not read the default config file, and searches for the
+helper only by absolute paths beside the client or in the standard `/usr/local` and `/usr`
+`bin`/`sbin` directories (never via `PATH` or the current directory).
 
 ## Differences from C mtr
 
 Deliberate differences, each with a code comment citing the C source:
 
 - `-j` with several targets prints one JSON array; C concatenates objects into invalid JSON.
-- CSV output quotes fields containing commas, quotes or newlines (RFC 4180); C never quotes.
+- CSV output quotes fields containing commas, quotes or newlines (RFC 4180); C never quotes. It is
+  machine-readable CSV, not spreadsheet-sanitized output, so formula-leading values are preserved.
 - The helper uses the IPv4 IHL field to locate headers; C assumes 20 bytes and misparses IP options.
 - Only `64:ff9b::/96` counts as the well-known NAT64 prefix; C compares just 32 bits.
 - `mark` support is reported only when the helper holds `CAP_NET_ADMIN`; C claims it whenever

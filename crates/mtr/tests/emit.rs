@@ -466,6 +466,12 @@ fn csv_quotes_fields_that_contain_separators_or_quotes() {
     );
     assert_eq!(mtr::emit::csv::csv_field("two\nlines"), "\"two\nlines\"");
     assert_eq!(mtr::emit::csv::csv_field("cr\rlf"), "\"cr\rlf\"");
+    assert_eq!(mtr::emit::csv::csv_field("雪,host"), "\"雪,host\"");
+    // This is machine-readable CSV, not spreadsheet sanitization: formula-leading data is
+    // deliberately preserved exactly, as documented in `csv_field` and the README.
+    for formula in ["=1+1", "+cmd", "-1", "@SUM(A1:A2)"] {
+        assert_eq!(mtr::emit::csv::csv_field(formula), formula);
+    }
     // Through the renderer: a PTR record with a comma stays one column.
     let e = finished_engine(base_cfg());
     let mut names = NameCache::default();

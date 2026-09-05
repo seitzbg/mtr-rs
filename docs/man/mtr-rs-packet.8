@@ -137,7 +137,16 @@ refuses
 .BR \-F ", " \-\-config " and " \-\-init-config ,
 and does not read the default user configuration file.  Those are the
 environment- and argument-controlled paths that the client would otherwise
-execute, read or create.  The marker keeps a sudoers rule for
+execute, read or create.  Helper discovery also avoids
+.B PATH
+and the current directory, using only absolute paths beside the running client
+or in
+.IR /usr/local/bin ,
+.IR /usr/local/sbin ,
+.I /usr/bin
+and
+.IR /usr/sbin .
+The marker keeps a sudoers rule for
 .B mtr-rs
 from granting arbitrary path access.  It does not drop the client's root
 privileges, and it does not restrict the network targets or probe options the

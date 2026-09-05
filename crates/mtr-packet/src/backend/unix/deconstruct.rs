@@ -395,6 +395,13 @@ mod tests {
         assert_eq!(p.kind, IcmpKind::EchoReply);
         assert_eq!(p.echo, Some((0x1234, 7)));
 
+        // IHL 15 is the maximum valid IPv4 header: 20 bytes plus 40 bytes of options.
+        let mut max = ip4_opts(IPPROTO_ICMP, [10, 0, 0, 1], [10, 0, 0, 2], 8, &[1; 40]);
+        max.extend(icmp(0, 0, 0x4321, 9));
+        let p = parse_icmp4(&max, true).unwrap();
+        assert_eq!(p.kind, IcmpKind::EchoReply);
+        assert_eq!(p.echo, Some((0x4321, 9)));
+
         // Inner: time-exceeded quoting a UDP probe whose IP header carries options.
         let mut quoted = ip4_opts(IPPROTO_UDP, [10, 0, 0, 2], [10, 0, 0, 9], 12, &[1, 1, 1, 1]);
         quoted.extend(udp(33000, 33434, 0));

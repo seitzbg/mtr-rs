@@ -113,6 +113,11 @@ impl FileConfig {
         {
             return Err("timeout must be positive".to_string());
         }
+        if let Some(t) = self.probe.timeout
+            && t > i64::from(i32::MAX)
+        {
+            return Err("timeout must be between 1 and 2147483647".to_string());
+        }
         if let Some(m) = self.probe.max_ttl
             && !(1..=255).contains(&m)
         {
@@ -122,6 +127,11 @@ impl FileConfig {
             && u < 1
         {
             return Err(format!("max_unknown must be at least 1: {u}"));
+        }
+        if let Some(u) = self.probe.max_unknown
+            && u > i64::from(i32::MAX)
+        {
+            return Err("max unknown must be between 1 and 2147483647".to_string());
         }
         Ok(LoadedConfig {
             file: self,
@@ -605,6 +615,22 @@ mod tests {
         assert_eq!(f.validate().unwrap_err(), "grace time must be positive");
     }
 
+    #[test]
+    fn validate_rejects_integer_values_the_runtime_cannot_represent() {
+        let mut f = FileConfig::default();
+        f.probe.max_unknown = Some(i64::from(i32::MAX) + 1);
+        assert_eq!(
+            f.validate().unwrap_err(),
+            "max unknown must be between 1 and 2147483647"
+        );
+        let mut f = FileConfig::default();
+        f.probe.timeout = Some(i64::from(i32::MAX) + 1);
+        assert_eq!(
+            f.validate().unwrap_err(),
+            "timeout must be between 1 and 2147483647"
+        );
+    }
+
     /// A `config.toml` in a private temp directory, removed again when `f` returns.
     fn with_file<R>(text: &str, f: impl FnOnce(&Path) -> R) -> R {
         static N: AtomicUsize = AtomicUsize::new(0);
@@ -1051,6 +1077,20 @@ asn = true
             "cannot save these options: non-root users cannot request an interval < 1.0 seconds"
         );
         assert!(slow.validate(true).is_ok());
+
+        for cfg in [
+            EffectiveConfig {
+                max_unknown: i64::from(i32::MAX) + 1,
+                ..EffectiveConfig::default()
+            },
+            EffectiveConfig {
+                timeout: i64::from(i32::MAX) + 1,
+                ..EffectiveConfig::default()
+            },
+        ] {
+            let err = init(Path::new("/nonexistent/x.toml"), &cfg, true).unwrap_err();
+            assert!(err.starts_with("cannot save these options: "), "{err}");
+        }
     }
 
     #[test]
