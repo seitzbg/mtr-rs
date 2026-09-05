@@ -3,7 +3,7 @@
 //! race the raw-socket tests of Tasks 7 and 10-15, which run as threads of the same process
 //! and would see `cap_net_raw` vanish mid-run once the binary is given the capability.
 //! Do not add a second test to this file. Linux only: the capability sets it inspects do not
-//! exist on FreeBSD, where `drop_all()` is the plain `setuid()` drop. GPL-2.0-only.
+//! exist on FreeBSD or macOS, where `drop_all()` is the plain `setuid()` drop. GPL-2.0-only.
 #![cfg(target_os = "linux")]
 
 #[test]

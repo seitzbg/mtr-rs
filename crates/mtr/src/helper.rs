@@ -259,8 +259,8 @@ async fn check(
 /// the `permission-denied` fatal, the startup check (the helper died opening its sockets) and an
 /// unsupported `ip-4`/`ip-6` (that family's socket never opened). On Linux, without `cap_net_raw`
 /// the helper falls back to unprivileged DGRAM ICMP, which the kernel only allows to gids inside
-/// `net.ipv4.ping_group_range` — so `setcap` alone is not the whole story. FreeBSD has no
-/// capabilities and no fallback: raw sockets need root, so the helper is installed setuid root.
+/// `net.ipv4.ping_group_range` — so `setcap` alone is not the whole story. FreeBSD and macOS have
+/// no capabilities and no fallback: raw sockets need root, so the helper is installed setuid root.
 pub fn privilege_hint(err: &str) -> Option<String> {
     let socket_failure = err == fatal_message(&ResponseKind::PermissionDenied)?
         || err == HelperError::StartupCheck.to_string()

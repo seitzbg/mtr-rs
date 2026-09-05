@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
 # Install (or remove) mtr-rs: both binaries, man pages, completions, and the privilege
-# mtr-rs-packet needs for raw sockets: cap_net_raw on Linux, setuid root on FreeBSD.
+# mtr-rs-packet needs for raw sockets: cap_net_raw on Linux, setuid root on FreeBSD and macOS.
 #
 #   scripts/install.sh [--prefix DIR] [--no-build] [--no-setcap] [--uninstall]
 #
@@ -29,8 +29,8 @@ while [ $# -gt 0 ]; do
     -h|--help)
       cat <<'EOF'
 Install (or remove) mtr-rs: both binaries, man pages, completions, and the privilege
-mtr-rs-packet needs for raw sockets: cap_net_raw on Linux, setuid root on FreeBSD
-(--no-setcap skips that step on either).
+mtr-rs-packet needs for raw sockets: cap_net_raw on Linux, setuid root on FreeBSD and macOS
+(--no-setcap skips that step everywhere).
 
   scripts/install.sh [--prefix DIR] [--no-build] [--no-setcap] [--uninstall]
 
@@ -144,7 +144,7 @@ its unprivileged fallback; for raw sockets (MPLS labels, TCP/SCTP hop discovery)
     sudo setcap cap_net_raw+ep $bindir/mtr-rs-packet
 EOF
     fi ;;
-  FreeBSD)
+  FreeBSD|Darwin)
     # No capabilities and no unprivileged fallback here: raw sockets need root, so the helper
     # is setuid root and drops back to the invoking user once its sockets are open.
     if [ "$(id -u)" = 0 ] && chown root:wheel "$bindir/mtr-rs-packet" && chmod 4755 "$bindir/mtr-rs-packet"; then

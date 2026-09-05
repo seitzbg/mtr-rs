@@ -70,8 +70,8 @@ Echo replies and time-exceeded errors are still reported. MPLS labels are
 not available on that path, and TCP and SCTP probes cannot see intermediate
 hops.
 .PP
-On FreeBSD there are no capabilities and no unprivileged ICMP sockets: raw
-sockets need root, so
+On FreeBSD and macOS there are no capabilities and no unprivileged fallback:
+raw sockets need root, so
 .B mtr-rs-packet
 is installed setuid root (as the ports
 .B mtr
@@ -81,14 +81,14 @@ once its sockets are open. There is no fallback: without the setuid bit only
 root can run
 .BR mtr-rs (8).
 .B SO_MARK
-and
-.B SO_BINDTODEVICE
-do not exist there; a
+does not exist there and a
 .B mark
-or
-.B local-device
 argument is answered with
-.BR invalid-argument .
+.BR invalid-argument ;
+so is
+.B local-device
+on FreeBSD, while macOS binds the probe socket to the interface with
+.BR IP_BOUND_IF .
 .PP
 .B SO_MARK
 is set per probe, after the privilege drop, so the drop keeps

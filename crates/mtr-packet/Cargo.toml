@@ -17,7 +17,7 @@ nix = { workspace = true, features = ["socket", "uio", "poll", "net", "user", "p
 socket2.workspace = true
 
 # Linux capabilities: the privilege drop clears them and `mark` support asks after
-# CAP_NET_ADMIN. FreeBSD has no equivalent; there the helper is setuid root and the drop is
-# `setuid()` alone (see privs.rs).
+# CAP_NET_ADMIN. FreeBSD and macOS have no equivalent; there the helper is setuid root and the
+# drop is `setuid()` alone (see privs.rs).
 [target.'cfg(target_os = "linux")'.dependencies]
 caps.workspace = true

@@ -11,6 +11,10 @@ All notable changes to mtr-rs are documented here. The format follows
   drops to the invoking user with `setuid()`; `scripts/install.sh` makes it setuid root, and the
   release ships FreeBSD tarballs and a pkg(8) package (`packaging/freebsd/`). CI runs the whole
   suite as root in a FreeBSD VM, so the loopback probe tests execute there.
+- macOS support (Apple silicon and Intel): the stub backend is gone; the helper is the same
+  raw-socket Unix backend as on FreeBSD, setuid root, with `local-device` honoured through
+  `IP_BOUND_IF`. CI runs the suite as root on GitHub's macOS runners and the release ships
+  macOS tarballs.
 
 ### Changed
 - Release tarballs are named `mtr-rs-<version>-<arch>-<os>.tar.gz` (`...-x86_64-linux`,
@@ -19,7 +23,7 @@ All notable changes to mtr-rs are documented here. The format follows
   the helper; `SO_MARK` has no equivalent there. The helper answers a `mark` or `local-device`
   it cannot honour with `invalid-argument` rather than silently probing without it.
 - The helper's privilege hints name the fix for the running OS: `setcap` and `ping_group_range` on
-  Linux, `chmod u+s` on FreeBSD.
+  Linux, `chmod u+s` on FreeBSD and macOS.
 
 ### Fixed
 - `--init-config` rejects `max_unknown` and `timeout` values above the runtime's integer range

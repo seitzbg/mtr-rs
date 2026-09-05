@@ -33,7 +33,7 @@ impl std::ops::DerefMut for TestBackend {
 }
 
 /// A real backend for the loopback tests, or `None` when this machine has neither
-/// `cap_net_raw` nor open ping sockets for `version` (Linux), or is not root (FreeBSD) — then
+/// `cap_net_raw` nor open ping sockets for `version` (Linux), or is not root (the BSDs) — then
 /// the caller returns early instead of failing (Global Constraints). Every test below starts with
 /// `let Some(mut b) = backend(4) else { return };`.
 fn backend(version: u8) -> Option<TestBackend> {

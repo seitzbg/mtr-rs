@@ -8,7 +8,7 @@
 //! thing. Add `MTR_PACKET_EXPECT_NET_ADMIN=1` when that copy also carries `cap_net_admin+ep`,
 //! and the exact surviving set is asserted.
 //!
-//! On FreeBSD there are no capability sets; the drop is `setuid()`, and the check is that the
+//! On FreeBSD and macOS there are no capability sets; the drop is `setuid()`, and the check is that the
 //! running helper's real, effective and saved uids are all ours (`ps`). Point
 //! `MTR_PACKET_UNDER_TEST` at a setuid-root copy and run as a user to prove the real thing.
 //! GPL-2.0-only.
@@ -175,7 +175,7 @@ fn assert_privileges_dropped(pid: u32, path: &str) {
     );
 }
 
-/// No capabilities on FreeBSD: the drop is `setuid(getuid())`, which from euid 0 rewrites the
+/// No capabilities on the BSDs: the drop is `setuid(getuid())`, which from euid 0 rewrites the
 /// real, effective *and* saved uid, so all three must equal ours (`ps -o ruid,uid,svuid`).
 /// Running as root that is 0 = 0 = 0, which proves little; against a setuid-root copy run as a
 /// user it proves the helper cannot get root back.

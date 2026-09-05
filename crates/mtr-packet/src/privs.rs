@@ -2,8 +2,9 @@
 //! packet/packet.c:43-102 (mtr 0.96, commit 7b01773). GPL-2.0-only.
 //!
 //! Linux grants raw sockets through `CAP_NET_RAW` (a file capability), so the drop has to
-//! clear the capability sets as well as the ids. FreeBSD has no capabilities: raw sockets need
-//! root, the helper is installed setuid root, and `setuid(getuid())` is the whole drop.
+//! clear the capability sets as well as the ids. FreeBSD and macOS have no capabilities: raw
+//! sockets need root, the helper is installed setuid root, and `setuid(getuid())` is the whole
+//! drop.
 
 #[cfg(target_os = "linux")]
 use caps::CapSet;
@@ -12,7 +13,7 @@ use nix::unistd::{getegid, geteuid, getgid, getuid, setgid, setuid};
 use crate::Fatal;
 
 /// `setgid(getgid())`, `setuid(getuid())`, verify: the part of `drop_elevated_permissions()`
-/// every Unix shares. On FreeBSD a `setuid()` from euid 0 sets the real, effective *and* saved
+/// every Unix shares. On the BSDs a `setuid()` from euid 0 sets the real, effective *and* saved
 /// ids, so nothing after it can `seteuid(0)` back.
 fn drop_ids() -> Result<(), Fatal> {
     let perm = |e: nix::Error| Fatal::Message(format!("Unable to drop elevated permissions: {e}"));
@@ -72,14 +73,14 @@ pub fn has_net_admin() -> bool {
     caps::has_cap(None, CapSet::Effective, caps::Capability::CAP_NET_ADMIN).unwrap_or(false)
 }
 
-/// FreeBSD: no capability sets to clear, so the id drop is the whole of
+/// FreeBSD and macOS: no capability sets to clear, so the id drop is the whole of
 /// `drop_elevated_permissions()` (packet.c:43-102 has nothing else under `#ifndef HAVE_LIBCAP`).
 #[cfg(not(target_os = "linux"))]
 pub fn drop_all() -> Result<(), Fatal> {
     drop_ids()
 }
 
-/// FreeBSD has no `SO_MARK`, so `mark` is never supported there, whatever the ids say.
+/// The BSDs have no `SO_MARK`, so `mark` is never supported there, whatever the ids say.
 #[cfg(not(target_os = "linux"))]
 pub fn has_net_admin() -> bool {
     false
