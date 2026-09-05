@@ -34,6 +34,8 @@ pub struct Family {
 
 /// `SO_SNDBUF` for the raw send sockets: comfortably above `PACKET_BUFFER_SIZE` plus headers.
 const SEND_BUFFER_SIZE: usize = 65536;
+/// `SO_RCVBUF` for the raw receive socket: many maximum-size replies.
+const RECV_BUFFER_SIZE: usize = 262_144;
 
 fn domain(version: u8) -> Domain {
     if version == 6 {
@@ -75,6 +77,10 @@ impl Family {
                 sock.set_send_buffer_size(SEND_BUFFER_SIZE)?;
             }
             let recv = Socket::new(domain(version), Type::RAW, Some(icmp_protocol(version)))?;
+            // Same story on receive: Darwin's `rip_recvspace` is 8192, so the 9020-byte reply to
+            // a maximum-size echo is dropped by `sbappendaddr()` before `recvfrom` can see it.
+            // A larger queue also rides out reply bursts on a busy machine.
+            recv.set_recv_buffer_size(RECV_BUFFER_SIZE)?;
             Ok(Sockets::Raw {
                 icmp_send,
                 udp_send,
