@@ -7,6 +7,11 @@ All notable changes to mtr-rs are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- The macOS binaries are signed with a Developer ID certificate (hardened runtime, timestamped)
+  and notarized, so a downloaded tarball runs without clearing the quarantine flag. The release
+  workflow does this when the `APPLE_CERTIFICATE_P12`, `APPLE_CERTIFICATE_PASSWORD`,
+  `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER_ID` secrets are set, and warns and
+  ships unsigned binaries otherwise.
 - Themes: `--theme dracula|nord|solarized|gruvbox` (the default stays the terminal's own ANSI
   palette) and a `[theme]` config section that names the preset and recolours any role on top of
   it: `ok`, `warn`, `bad`, `critical`, `accent`, `alert`, `dim`, `selected`, each a colour name,

@@ -147,9 +147,11 @@ jobs:
           security import "$RUNNER_TEMP/developer-id.p12" -P "$P12_PASSWORD" -f pkcs12 -A \
             -t cert -k "$keychain"
           rm -f "$RUNNER_TEMP/developer-id.p12"
-          # The Developer ID G2 intermediate completes the chain; Xcode would install it.
+          # The Developer ID G2 intermediate completes the chain. Recent runner images already
+          # carry it, and `security import` reports a duplicate as an error, so tolerate that.
           curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
-          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain" \
+            || echo "Developer ID G2 intermediate already present"
           # Let codesign use the key without a UI prompt.
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
