@@ -75,6 +75,56 @@ jobs:
           name: mtr-rs-${{ matrix.arch }}
           path: out/*
 
+  # macOS tarballs on GitHub's macOS runners: Apple silicon (`macos-latest`) and Intel
+  # (`macos-15-intel`). No package format: the tarball plus `scripts/install.sh` (which makes
+  # the helper setuid root) is the install path, as for FreeBSD without pkg.
+  build-macos:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: aarch64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: stable
+      - name: Check the tag matches the workspace version
+        if: github.event_name == 'push'
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$version" != "$tag" ]; then
+            echo "tag v$tag does not match workspace version $version" >&2
+            exit 1
+          fi
+      - name: Build the distribution layout
+        run: |
+          cargo xtask dist | tail -1 > dist-dir.txt
+          cat dist-dir.txt
+      - name: Sanity-check the binaries
+        # Root, so the helper opens its raw sockets and answers.
+        run: |
+          "$(cat dist-dir.txt)/bin/mtr-rs" --version
+          printf '1 check-support feature version\n2 check-support feature ip-4\n' | sudo "$(cat dist-dir.txt)/bin/mtr-rs-packet"
+          sudo "$(cat dist-dir.txt)/bin/mtr-rs" -r -c 1 127.0.0.1
+      - name: Assemble artifacts
+        run: |
+          mkdir -p out
+          dir=$(basename "$(cat dist-dir.txt)")
+          tar -C target/dist -czf "out/${dir}.tar.gz" "$dir"
+          ls -l out
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mtr-rs-macos-${{ matrix.arch }}
+          path: out/*
+
   # FreeBSD tarballs and pkg(8) packages, built inside a FreeBSD VM on the Ubuntu runner
   # (see ci.yml for why pkg's rust and not rustup). The aarch64 VM is emulated, so that
   # build takes a while; it is a tag-time cost only.
@@ -127,7 +177,7 @@ jobs:
   # is the one the upload step carried before: tags only, and a `workflow_dispatch` run
   # publishes nothing unless it is explicitly told `dry_run: false`.
   publish:
-    needs: [build, build-freebsd]
+    needs: [build, build-freebsd, build-macos]
     if: startsWith(github.ref, 'refs/tags/') && (github.event_name == 'push' || inputs.dry_run != 'true')
     runs-on: ubuntu-latest
     permissions:

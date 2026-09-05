@@ -1,9 +1,12 @@
-//! Unix backend (Linux and FreeBSD): raw sockets, plus the unprivileged DGRAM fallback on
-//! Linux. Ported from packet/probe_unix.c (mtr 0.96, commit 7b01773). GPL-2.0-only.
+//! Unix backend (Linux, FreeBSD and macOS): raw sockets, plus the unprivileged DGRAM fallback
+//! on Linux. Ported from packet/probe_unix.c (mtr 0.96, commit 7b01773). GPL-2.0-only.
 //!
-//! What differs between the two is confined to `sockets.rs` (which sockets can be opened and
+//! What differs between the three is confined to `sockets.rs` (which sockets can be opened and
 //! which options exist), `errqueue.rs` (Linux only) and `privs.rs`; the packet construction,
-//! reply parsing, matching and the stream probes are the same code on both.
+//! reply parsing, matching and the stream probes are the same code on all of them. macOS hands
+//! raw IPv4 receivers the `ip_len` field in host byte order (C's `check_length_order()` dance,
+//! probe_unix.c:124-190); the parser never reads that field, only the IHL, so nothing here
+//! depends on it.
 //!
 //! UDP destination ports (probe_unix.c:70-84, 96-111): on a raw socket the port lives in the
 //! UDP header we built, so the sockaddr port is 0. On a DGRAM socket the kernel writes the

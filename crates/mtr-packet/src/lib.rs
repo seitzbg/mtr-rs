@@ -37,10 +37,7 @@ pub enum Fatal {
 /// unprivileged process that will actually send the probes.
 pub fn run() -> Result<(), Fatal> {
     use std::os::fd::AsFd;
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     let mut backend = backend::unix::UnixBackend::open_privileged()?;
-    #[cfg(target_os = "macos")]
-    let mut backend = backend::macos::MacosBackend::open_privileged()?;
     privs::drop_all()?;
     backend
         .finish_init()

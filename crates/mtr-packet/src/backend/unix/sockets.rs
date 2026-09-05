@@ -2,10 +2,10 @@
 //! and packet/construct_unix.c:297-406, 614-698, 766-826 (mtr 0.96, commit 7b01773).
 //! GPL-2.0-only.
 //!
-//! The raw sockets are the same on Linux and FreeBSD. The unprivileged fallback is Linux only:
-//! it needs "ping" sockets (`SOCK_DGRAM` + `IPPROTO_ICMP`) and `IP_RECVERR`, neither of which
-//! FreeBSD has, so there a helper that cannot open raw sockets fails to start, exactly as C's
-//! does without `HAVE_LINUX_ERRQUEUE_H`.
+//! The raw sockets are the same on Linux, FreeBSD and macOS. The unprivileged fallback is Linux
+//! only: it needs `IP_RECVERR` to hear time-exceeded on a "ping" socket, which neither BSD has,
+//! so there a helper that cannot open raw sockets fails to start, exactly as C's does without
+//! `HAVE_LINUX_ERRQUEUE_H`.
 
 use std::net::SocketAddr;
 use std::os::fd::{AsFd, BorrowedFd};
@@ -31,6 +31,11 @@ pub struct Family {
     pub version: u8,
     pub sockets: Sockets,
 }
+
+/// `SO_SNDBUF` for the raw send sockets: comfortably above `PACKET_BUFFER_SIZE` plus headers.
+const SEND_BUFFER_SIZE: usize = 65536;
+/// `SO_RCVBUF` for the raw receive socket: many maximum-size replies.
+const RECV_BUFFER_SIZE: usize = 262_144;
 
 fn domain(version: u8) -> Domain {
     if version == 6 {
@@ -65,7 +70,17 @@ impl Family {
         let raw = (|| -> std::io::Result<Sockets> {
             let icmp_send = Socket::new(domain(version), Type::RAW, Some(icmp_protocol(version)))?;
             let udp_send = Socket::new(domain(version), Type::RAW, Some(Protocol::UDP))?;
+            // A probe may be PACKET_BUFFER_SIZE (9000) bytes. Darwin's raw-socket send buffer
+            // defaults to 8192 (`rip_sendspace`), which turns such a `sendto` into `EMSGSIZE`;
+            // FreeBSD's 9216 barely fits and Linux's is far larger. Ask for room everywhere.
+            for sock in [&icmp_send, &udp_send] {
+                sock.set_send_buffer_size(SEND_BUFFER_SIZE)?;
+            }
             let recv = Socket::new(domain(version), Type::RAW, Some(icmp_protocol(version)))?;
+            // Same story on receive: Darwin's `rip_recvspace` is 8192, so the 9020-byte reply to
+            // a maximum-size echo is dropped by `sbappendaddr()` before `recvfrom` can see it.
+            // A larger queue also rides out reply bursts on a busy machine.
+            recv.set_recv_buffer_size(RECV_BUFFER_SIZE)?;
             Ok(Sockets::Raw {
                 icmp_send,
                 udp_send,
@@ -133,9 +148,16 @@ impl Family {
     }
 }
 
+/// `IPPROTO_SCTP` by its IANA number: socket2 only names it on platforms whose libc does, and
+/// macOS's does not. The `socket()` call is the support probe, so an unknown protocol number is
+/// exactly the `EPROTONOSUPPORT` we want there.
+pub fn sctp_protocol() -> Protocol {
+    Protocol::from(132)
+}
+
 /// `check_sctp_support()` (probe_unix.c:209-222).
 pub fn check_sctp_support() -> bool {
-    Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::SCTP)).is_ok()
+    Socket::new(Domain::IPV4, Type::STREAM, Some(sctp_protocol())).is_ok()
 }
 
 /// The first half of C's option block: the routing mark and the bind-to-device, both applied
@@ -152,16 +174,37 @@ pub fn set_mark_and_device(sock: &Socket, params: &CProbeParams) -> std::io::Res
     Ok(())
 }
 
-/// FreeBSD has neither `SO_MARK` nor `SO_BINDTODEVICE`. C compiles both blocks out
-/// (`#ifdef SO_MARK` / `#ifdef SO_BINDTODEVICE`, construct_unix.c:624-638) and so silently
-/// probes without them; a request that asked for either is answered with `invalid-argument`
+/// The BSDs have no `SO_MARK`, and only macOS has a per-socket interface bind (`IP_BOUND_IF` /
+/// `IPV6_BOUND_IF`, by index). C compiles both blocks out (`#ifdef SO_MARK` /
+/// `#ifdef SO_BINDTODEVICE`, construct_unix.c:624-638) and so silently probes without them; a
+/// request that asked for something the platform cannot do is answered with `invalid-argument`
 /// here instead, since a probe sent through the wrong table or interface is not the probe that
 /// was asked for. The client never sends `mark` where `check-support` said no, and resolves
-/// `-I` to a `local-ip` itself, so in practice neither reaches a FreeBSD helper.
+/// `-I` to a `local-ip` itself, so in practice neither reaches a BSD helper.
 #[cfg(not(target_os = "linux"))]
-pub fn set_mark_and_device(_sock: &Socket, params: &CProbeParams) -> std::io::Result<()> {
-    if params.routing_mark != 0 || params.local_device.is_some() {
-        return Err(std::io::Error::from_raw_os_error(nix::libc::EINVAL));
+pub fn set_mark_and_device(sock: &Socket, params: &CProbeParams) -> std::io::Result<()> {
+    let einval = || std::io::Error::from_raw_os_error(nix::libc::EINVAL);
+    if params.routing_mark != 0 {
+        return Err(einval());
+    }
+    if let Some(dev) = &params.local_device {
+        #[cfg(target_os = "macos")]
+        {
+            // An unknown name is `ENODEV`, as `SO_BINDTODEVICE` reports it on Linux.
+            let index = nix::net::if_::if_nametoindex(dev.as_str())
+                .map_err(|_| std::io::Error::from_raw_os_error(nix::libc::ENODEV))?;
+            let index = std::num::NonZeroU32::new(index).ok_or_else(einval)?;
+            if params.ip_version == 6 {
+                sock.bind_device_by_index_v6(Some(index))?;
+            } else {
+                sock.bind_device_by_index_v4(Some(index))?;
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (sock, dev);
+            return Err(einval());
+        }
     }
     Ok(())
 }
@@ -234,7 +277,7 @@ pub fn apply_probe_options(
 }
 
 /// Whether a probe socket for `version` can be opened at all. The loopback tests gate on this:
-/// with neither `cap_net_raw` nor open ping sockets (Linux), or without root (FreeBSD), there is
+/// with neither `cap_net_raw` nor open ping sockets (Linux), or without root (the BSDs), there is
 /// no socket to probe *with*, and those tests return early instead of failing (Global
 /// Constraints). Deliberately not `#[cfg(test)]`, so integration tests can gate on it too — and
 /// deliberately *not* used by `ipv4_opens_raw_or_falls_back_to_dgram_with_recverr` below, which
@@ -297,7 +340,7 @@ mod tests {
             .unwrap_or(false)
     }
 
-    /// FreeBSD has no ping sockets: without root there is no probe socket of any kind.
+    /// No `IP_RECVERR` on the BSDs, hence no fallback: without root there is no probe socket.
     #[cfg(not(target_os = "linux"))]
     fn ping_sockets_allowed() -> bool {
         false
@@ -323,7 +366,7 @@ mod tests {
         false
     }
 
-    /// FreeBSD gates raw sockets on `PRIV_NETINET_RAW`, i.e. root (outside a jail).
+    /// FreeBSD gates raw sockets on `PRIV_NETINET_RAW` and macOS on euid 0: root either way.
     #[cfg(not(target_os = "linux"))]
     fn raw_sockets_allowed() -> bool {
         !env_forces_no_ping() && nix::unistd::geteuid().is_root()
@@ -338,7 +381,7 @@ mod tests {
             .unwrap_or(false)
     }
 
-    /// No `/proc` on FreeBSD; a loopback `::1` bind is the equivalent question.
+    /// No `/proc` on the BSDs; a loopback `::1` bind is the equivalent question.
     #[cfg(not(target_os = "linux"))]
     fn ipv6_available() -> bool {
         std::net::UdpSocket::bind("[::1]:0").is_ok()
@@ -408,7 +451,7 @@ mod tests {
     }
 
     /// Without the Linux fallback an unprivileged open fails outright: that is what makes the
-    /// setuid-root install on FreeBSD necessary, so pin it rather than let a stray fallback
+    /// setuid-root install on the BSDs necessary, so pin it rather than let a stray fallback
     /// creep in and hide a broken install as a helper that "works" and hears nothing.
     #[cfg(not(target_os = "linux"))]
     #[test]
@@ -442,7 +485,7 @@ mod tests {
 
     /// Whether the kernel has SCTP: `/proc/net/protocols` on Linux (read *after* the probe,
     /// since opening the socket is what autoloads the module), `kldstat -m sctp` on FreeBSD
-    /// (which also finds it when it is compiled into the kernel).
+    /// (which also finds it when it is compiled into the kernel), never on macOS.
     fn sctp_in_kernel() -> bool {
         #[cfg(target_os = "linux")]
         {
@@ -450,7 +493,11 @@ mod tests {
                 .map(|s| s.lines().any(|l| l.starts_with("SCTP")))
                 .unwrap_or(false)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        {
+            false
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             std::process::Command::new("kldstat")
                 .args(["-q", "-m", "sctp"])

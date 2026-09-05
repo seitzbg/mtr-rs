@@ -75,7 +75,7 @@ pub fn open(
     };
     let proto = match protocol {
         Protocol::Tcp => socket2::Protocol::TCP,
-        Protocol::Sctp => socket2::Protocol::SCTP,
+        Protocol::Sctp => super::sockets::sctp_protocol(),
         _ => return Err(einval()),
     };
     // The local and remote addresses must agree with the family we are opening; a mismatch
