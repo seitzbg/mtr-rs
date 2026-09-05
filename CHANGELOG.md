@@ -6,6 +6,10 @@ All notable changes to mtr-rs are documented here. The format follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.0] - 2026-09-05
+
 ### Added
 - FreeBSD support (x86_64 and aarch64): the helper opens the same raw sockets as on Linux and
   drops to the invoking user with `setuid()`; `scripts/install.sh` makes it setuid root, and the
@@ -124,7 +128,8 @@ First release of the Rust port of mtr 0.96 (upstream commit 7b01773).
 - GitHub Actions pinned to commit SHAs, read-only tokens except for the release publish step, and
   cargo-deny in CI.
 
-[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/seitzbg/mtr-rs/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/seitzbg/mtr-rs/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/seitzbg/mtr-rs/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/seitzbg/mtr-rs/releases/tag/v0.1.0

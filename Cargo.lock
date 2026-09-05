@@ -1408,7 +1408,7 @@ dependencies = [
 
 [[package]]
 name = "mtr"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1433,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "mtr-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "mtr-proto",
  "thiserror 2.0.20",
@@ -1441,7 +1441,7 @@ dependencies = [
 
 [[package]]
 name = "mtr-packet"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "caps",
  "mtr-proto",
@@ -1452,7 +1452,7 @@ dependencies = [
 
 [[package]]
 name = "mtr-proto"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "proptest",
  "thiserror 2.0.20",
@@ -3140,7 +3140,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
