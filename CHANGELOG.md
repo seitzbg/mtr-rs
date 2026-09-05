@@ -7,6 +7,12 @@ All notable changes to mtr-rs are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Themes: `--theme dracula|nord|solarized|gruvbox` (the default stays the terminal's own ANSI
+  palette) and a `[theme]` config section that names the preset and recolours any role on top of
+  it: `ok`, `warn`, `bad`, `critical`, `accent`, `alert`, `dim`, `selected`, each a colour name,
+  256-colour index, `#rrggbb`, or `reset`. RGB presets are reduced to 256 colours where that is what
+  the terminal offers, and give way to the terminal's own palette on 16; a themed `selected` is a
+  row background instead of the reversed row.
 - The release workflow regenerates the Homebrew formula from the published tarballs and pushes it
   to [seitzbg/homebrew-mtr-rs](https://github.com/seitzbg/homebrew-mtr-rs); without the
   `HOMEBREW_TAP_TOKEN` secret it warns and skips. `scripts/homebrew-formula.sh` does the same by

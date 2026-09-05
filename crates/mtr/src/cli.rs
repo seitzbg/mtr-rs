@@ -17,6 +17,7 @@ pub const PROGRAM: &str = "mtr-rs";
 use crate::config_file::ColorChoice;
 use crate::options::split_mtr_options;
 use crate::tui::palette::RttThresholds;
+use crate::tui::theme::{Theme, ThemeName, ThemeOverrides};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
@@ -361,6 +362,9 @@ pub struct Args {
         value_parser = parse_rtt_thresholds
     )]
     pub rtt_thresholds: Option<RttThresholds>,
+    /// Colour theme for the TUI (default is the terminal's own ANSI palette)
+    #[arg(long = "theme", value_name = "NAME", value_enum)]
+    pub theme: Option<ThemeName>,
     /// Read the configuration from PATH instead of ~/.config/mtr-rs/config.toml
     #[arg(long = "config", value_name = "PATH")]
     pub config: Option<String>,
@@ -382,6 +386,13 @@ pub struct Args {
     /// wins, and `config_file::apply` leaves this `None` when `--color` was given.
     #[arg(skip)]
     pub color_choice: Option<ColorChoice>,
+    /// `theme.preset`. Only the config file writes it; `--theme` lands in `theme` above and wins,
+    /// and `config_file::apply` leaves this `None` when `--theme` was given.
+    #[arg(skip)]
+    pub theme_preset: Option<ThemeName>,
+    /// The `[theme]` section's per-role colours; the file is the only source.
+    #[arg(skip)]
+    pub theme_overrides: ThemeOverrides,
     /// `display.sparkline`: the Recent column shown when the TUI starts (default on).
     #[arg(skip = true)]
     pub sparkline: bool,
@@ -429,6 +440,9 @@ pub struct Options {
     pub ascii: bool,
     pub color: bool,
     pub rtt_thresholds: RttThresholds,
+    /// The preset (`--theme`, else `theme.preset`, else the terminal's ANSI palette) with the
+    /// file's `[theme]` overrides applied.
+    pub theme: Theme,
     /// The Recent sparkline column and the detail pane, as the TUI should start.
     pub sparkline: bool,
     pub detail_pane: bool,
@@ -436,6 +450,17 @@ pub struct Options {
 }
 
 impl Args {
+    /// The preset in effect (`--theme` beats the file's `theme.preset`) with the file's per-role
+    /// overrides on top.
+    pub fn theme(&self) -> Theme {
+        Theme::preset(self.theme_name()).with_overrides(&self.theme_overrides)
+    }
+
+    /// `--theme`, else the file's `theme.preset`, else the default.
+    pub fn theme_name(&self) -> ThemeName {
+        self.theme.or(self.theme_preset).unwrap_or_default()
+    }
+
     /// Parse `argv` (including `argv[0]`) and record the last-wins output mode.
     pub fn parse_argv(argv: Vec<String>) -> Result<Args, clap::Error> {
         let matches = Args::command().try_get_matches_from(argv)?;
@@ -656,6 +681,7 @@ impl Args {
                 ColorChoice::Auto => std::env::var_os("NO_COLOR").is_none(),
             },
             rtt_thresholds: self.rtt_thresholds.unwrap_or_default(),
+            theme: self.theme(),
             sparkline: self.sparkline,
             detail_pane: self.detail_pane,
             config,

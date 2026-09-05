@@ -37,3 +37,24 @@
 #dns = true
 # Look up origin AS numbers; true is -z.
 #asn = false
+
+[theme]
+# The colour preset (--theme): "default" is the terminal's own ANSI palette; "dracula",
+# "nord", "solarized" and "gruvbox" are RGB: reduced to 256 colours, or on a 16-colour terminal
+# replaced by the terminal's palette role by role.
+#preset = "default"
+# One colour per role, replacing the preset's: a name ("green", "light red", "dark gray"),
+# a 256-colour index ("208"), "#rrggbb", or "reset" for no colour. Shown: the preset's own.
+#   ok / warn / bad / critical  the loss and RTT ramps, critical bold at the top
+#   accent                      headers (bold), the prompt, the RTT chart
+#   alert                       the status line and [PAUSED] (bold)
+#   dim                         unknown hops, secondary rows, axes, footer hints
+#   selected                    the selected row's background ("reset" reverses it)
+#ok = "green"
+#warn = "yellow"
+#bad = "magenta"
+#critical = "red"
+#accent = "blue"
+#alert = "yellow"
+#dim = "reset"
+#selected = "reset"
