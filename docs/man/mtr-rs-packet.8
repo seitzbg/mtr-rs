@@ -55,7 +55,7 @@ A malformed line is answered
 and an overlong one
 .BR "0 command-buffer-overflow" .
 .SH PRIVILEGES
-Raw sockets need
+On Linux, raw sockets need
 .BR CAP_NET_RAW :
 .PP
 .RS
@@ -69,6 +69,26 @@ falls back to unprivileged ICMP and UDP datagram sockets with
 Echo replies and time-exceeded errors are still reported. MPLS labels are
 not available on that path, and TCP and SCTP probes cannot see intermediate
 hops.
+.PP
+On FreeBSD there are no capabilities and no unprivileged ICMP sockets: raw
+sockets need root, so
+.B mtr-rs-packet
+is installed setuid root (as the ports
+.B mtr
+is) and drops to the invoking user with
+.BR setuid (2)
+once its sockets are open. There is no fallback: without the setuid bit only
+root can run
+.BR mtr-rs (8).
+.B SO_MARK
+and
+.B SO_BINDTODEVICE
+do not exist there; a
+.B mark
+or
+.B local-device
+argument is answered with
+.BR invalid-argument .
 .PP
 .B SO_MARK
 is set per probe, after the privilege drop, so the drop keeps

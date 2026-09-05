@@ -3,7 +3,8 @@
 A Rust port of [mtr](https://github.com/traviscross/mtr) (My TraceRoute). Like upstream it is two
 binaries: the unprivileged `mtr-rs` client and the privileged `mtr-rs-packet` helper. Both speak
 the C mtr 0.96 line protocol, so each half also works with its C counterpart. The TUI is the
-default; `-r`, `-w`, `-j` and `-C` give the classic reports. Linux only, GPL-2.0-only.
+default; `-r`, `-w`, `-j` and `-C` give the classic reports. Linux and FreeBSD, x86_64 and
+aarch64. GPL-2.0-only.
 
 ## Screenshots
 
@@ -13,14 +14,18 @@ default; `-r`, `-w`, `-j` and `-C` give the classic reports. Linux only, GPL-2.0
 
 ## Install
 
-    # release tarball, unpacked as mtr-rs-<version>-<arch>/
-    tar xzf mtr-rs-0.2.1-x86_64.tar.gz && cd mtr-rs-0.2.1-x86_64
+    # release tarball, unpacked as mtr-rs-<version>-<arch>-<os>/
+    tar xzf mtr-rs-0.2.1-x86_64-linux.tar.gz && cd mtr-rs-0.2.1-x86_64-linux
     sudo install -m 755 bin/mtr-rs bin/mtr-rs-packet /usr/local/bin/
     sudo install -m 644 man/*.8 /usr/local/share/man/man8/
-    sudo setcap cap_net_raw+ep /usr/local/bin/mtr-rs-packet
+    sudo setcap cap_net_raw+ep /usr/local/bin/mtr-rs-packet              # Linux
+    sudo chown root:wheel /usr/local/bin/mtr-rs-packet && sudo chmod 4755 /usr/local/bin/mtr-rs-packet  # FreeBSD
 
     # Debian package: same files, setcap from its postinst
     sudo dpkg -i mtr-rs_0.2.1-1_amd64.deb
+
+    # FreeBSD package: same files, mtr-rs-packet setuid root
+    sudo pkg add mtr-rs-0.2.1-aarch64-freebsd.pkg
 
     # from a checkout, with man pages and bash/zsh/fish completions
     cargo build --release --workspace && cargo xtask dist
@@ -33,9 +38,10 @@ default; `-r`, `-w`, `-j` and `-C` give the classic reports. Linux only, GPL-2.0
     cargo install --path crates/mtr-packet
     sudo setcap cap_net_raw+ep "$(command -v mtr-rs-packet)"
 
-The package declares no `Conflicts`, `Provides` or `Replaces`, so `mtr` and `mtr-tiny` can stay
-installed. `--uninstall` removes exactly what it installed, given the same `--prefix`. A failing
-`setcap` prints the command and exits 0.
+Neither package declares a conflict with the distribution's `mtr`, so it can stay installed.
+`--uninstall` removes exactly what it installed, given the same `--prefix`. A failing privilege
+grant (`setcap`, or the FreeBSD `chmod u+s` without root) prints the command and exits 0.
+`scripts/install.sh` needs bash, which on FreeBSD is `pkg install bash`.
 
 ## Usage
 
@@ -80,6 +86,15 @@ Without `cap_net_raw` the helper falls back to unprivileged ICMP and UDP datagra
 the kernel only hands to gids inside `net.ipv4.ping_group_range`; the client names both fixes when
 it cannot open its sockets. On that path TCP and SCTP probes see the final hop only: time-exceeded
 replies need a raw socket.
+
+FreeBSD has neither capabilities nor unprivileged ICMP sockets, so there the helper is installed
+setuid root, as the ports `mtr` is, and drops to the invoking user once its raw sockets are open:
+
+    sudo chown root:wheel "$(command -v mtr-rs-packet)" && sudo chmod 4755 "$(command -v mtr-rs-packet)"
+
+`-M`/`--mark` (`SO_MARK`) and the helper's `local-device` (`SO_BINDTODEVICE`) are Linux only; the
+client refuses `-M` elsewhere, and `-I` works everywhere because the client resolves the interface
+to a source address itself.
 
 The helper opens its sockets, then drops setgid, setuid and its capabilities before reading stdin.
 One exception: `CAP_NET_ADMIN` is kept when the helper started with it, because `SO_MARK` is set

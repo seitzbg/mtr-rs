@@ -1,10 +1,28 @@
 //! Drop setuid privileges and every capability once the sockets are open. Ported from
 //! packet/packet.c:43-102 (mtr 0.96, commit 7b01773). GPL-2.0-only.
+//!
+//! Linux grants raw sockets through `CAP_NET_RAW` (a file capability), so the drop has to
+//! clear the capability sets as well as the ids. FreeBSD has no capabilities: raw sockets need
+//! root, the helper is installed setuid root, and `setuid(getuid())` is the whole drop.
 
+#[cfg(target_os = "linux")]
 use caps::CapSet;
 use nix::unistd::{getegid, geteuid, getgid, getuid, setgid, setuid};
 
 use crate::Fatal;
+
+/// `setgid(getgid())`, `setuid(getuid())`, verify: the part of `drop_elevated_permissions()`
+/// every Unix shares. On FreeBSD a `setuid()` from euid 0 sets the real, effective *and* saved
+/// ids, so nothing after it can `seteuid(0)` back.
+fn drop_ids() -> Result<(), Fatal> {
+    let perm = |e: nix::Error| Fatal::Message(format!("Unable to drop elevated permissions: {e}"));
+    setgid(getgid()).map_err(perm)?;
+    setuid(getuid()).map_err(perm)?;
+    if geteuid() != getuid() || getegid() != getgid() {
+        return Err(Fatal::Message("Unable to drop elevated permissions".into()));
+    }
+    Ok(())
+}
 
 /// `drop_elevated_permissions()`: `setgid(getgid())`, `setuid(getuid())`, verify, then clear
 /// the effective, permitted and inheritable sets (`cap_clear` + `cap_set_proc`) so nothing
@@ -13,13 +31,9 @@ use crate::Fatal;
 /// Deviation 34: keep `CAP_NET_ADMIN` — and only that — when the file capability granted it, so
 /// `SO_MARK` (the `--mark` option) can work after the drop. C clears everything and lets
 /// `setsockopt(SO_MARK)` fail later, which is why `-M` is silently broken there.
+#[cfg(target_os = "linux")]
 pub fn drop_all() -> Result<(), Fatal> {
-    let perm = |e: nix::Error| Fatal::Message(format!("Unable to drop elevated permissions: {e}"));
-    setgid(getgid()).map_err(perm)?;
-    setuid(getuid()).map_err(perm)?;
-    if geteuid() != getuid() || getegid() != getgid() {
-        return Err(Fatal::Message("Unable to drop elevated permissions".into()));
-    }
+    drop_ids()?;
     // Computed *after* the setuid: dropping from root to a non-zero uid already clears the
     // capability sets, so this asks what we actually still hold.
     let keep_net_admin = has_net_admin();
@@ -53,8 +67,22 @@ pub fn drop_all() -> Result<(), Fatal> {
 /// network namespace belongs to a *different* user namespace: the kernel gates `SO_MARK` on
 /// `sockopt_ns_capable(sock_net(sk)->user_ns, ...)`, so there the capability can be held and
 /// `setsockopt` still fail.
+#[cfg(target_os = "linux")]
 pub fn has_net_admin() -> bool {
     caps::has_cap(None, CapSet::Effective, caps::Capability::CAP_NET_ADMIN).unwrap_or(false)
+}
+
+/// FreeBSD: no capability sets to clear, so the id drop is the whole of
+/// `drop_elevated_permissions()` (packet.c:43-102 has nothing else under `#ifndef HAVE_LIBCAP`).
+#[cfg(not(target_os = "linux"))]
+pub fn drop_all() -> Result<(), Fatal> {
+    drop_ids()
+}
+
+/// FreeBSD has no `SO_MARK`, so `mark` is never supported there, whatever the ids say.
+#[cfg(not(target_os = "linux"))]
+pub fn has_net_admin() -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -63,6 +91,7 @@ mod tests {
     fn has_net_admin_is_false_without_the_capability() {
         // The unit-test binary is never setcap'd; if it were, this test is meaningless and
         // the MTR_E2E privs_drop test covers it.
+        #[cfg(target_os = "linux")]
         if caps::has_cap(
             None,
             caps::CapSet::Effective,

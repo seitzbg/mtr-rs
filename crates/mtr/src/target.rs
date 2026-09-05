@@ -211,7 +211,13 @@ mod tests {
             interface_address("no-such-if0", false),
             Err("no such interface".to_string())
         );
-        let lo = interface_address("lo", false).unwrap();
+        // Linux names loopback `lo`, the BSDs `lo0`.
+        let name = if cfg!(target_os = "linux") {
+            "lo"
+        } else {
+            "lo0"
+        };
+        let lo = interface_address(name, false).unwrap();
         assert!(lo.is_loopback());
     }
 

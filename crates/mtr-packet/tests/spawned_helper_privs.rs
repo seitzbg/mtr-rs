@@ -6,7 +6,12 @@
 //! Unprivileged this asserts the (already empty) sets stay empty; run against a copy carrying
 //! `cap_net_raw+ep` via `MTR_PACKET_UNDER_TEST=/path/to/mtr-packet` and it proves the real
 //! thing. Add `MTR_PACKET_EXPECT_NET_ADMIN=1` when that copy also carries `cap_net_admin+ep`,
-//! and the exact surviving set is asserted. GPL-2.0-only.
+//! and the exact surviving set is asserted.
+//!
+//! On FreeBSD there are no capability sets; the drop is `setuid()`, and the check is that the
+//! running helper's real, effective and saved uids are all ours (`ps`). Point
+//! `MTR_PACKET_UNDER_TEST` at a setuid-root copy and run as a user to prove the real thing.
+//! GPL-2.0-only.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
@@ -14,6 +19,7 @@ use std::time::{Duration, Instant};
 
 /// `CAP_NET_ADMIN` alone, as `/proc/<pid>/status` spells a capability mask: it is bit 12, so
 /// 0x1000.
+#[cfg(target_os = "linux")]
 const NET_ADMIN_ONLY: &str = "0000000000001000";
 
 /// Every wait in this test is bounded by this: a hung helper must fail the test, not hang
@@ -43,6 +49,7 @@ impl Drop for Reaper {
 /// `CapEff:`, `CapBnd:` and `CapAmb:`, each a 16-digit hex mask. `status` stays world-readable
 /// for a process that gained file capabilities (only `maps`/`mem`-style entries are gated on
 /// ptrace access), so this also works against a setcap'd copy.
+#[cfg(target_os = "linux")]
 fn capabilities_of(pid: u32) -> Vec<(String, String)> {
     let status = std::fs::read_to_string(format!("/proc/{pid}/status"))
         .unwrap_or_else(|e| panic!("reading /proc/{pid}/status: {e}"));
@@ -92,15 +99,39 @@ fn the_running_helper_holds_no_capabilities_beyond_a_granted_net_admin() {
         "unexpected reply {line:?} from {path}"
     );
 
-    // The child is now blocked on stdin, which we still hold open. Deviation 34: `CAP_NET_ADMIN`
-    // (bit 12, mask 0x1000) is the one capability the drop may keep, and only in the effective
-    // and permitted sets, when the file capabilities granted it; the inheritable set is always
-    // cleared.
-    //
-    // Unprivileged the test cannot tell which of the two outcomes to demand, so it accepts
-    // either; set `MTR_PACKET_EXPECT_NET_ADMIN=1` when the helper under test really was given
-    // the capability and the positive half of the deviation is asserted exactly, i.e. a helper
-    // that wrongly dropped `CAP_NET_ADMIN` fails here.
+    // The child is now blocked on stdin, which we still hold open, so its privileges can be
+    // inspected at leisure.
+    assert_privileges_dropped(pid, &path);
+
+    // Closing stdin ends the loop (lib.rs `serve`), as EOF does in packet.c:131-167. Poll for
+    // the exit rather than blocking in `wait()`, so a helper that ignores EOF fails here too.
+    drop(stdin);
+    let deadline = Instant::now() + TIMEOUT;
+    let status = loop {
+        match reaper.0.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {}
+            Err(e) => panic!("waiting for {path}: {e}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{path} did not exit within {TIMEOUT:?} of stdin closing"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(status.success(), "{path} exited with {status}");
+}
+
+/// Deviation 34: `CAP_NET_ADMIN` (bit 12, mask 0x1000) is the one capability the drop may keep,
+/// and only in the effective and permitted sets, when the file capabilities granted it; the
+/// inheritable set is always cleared.
+///
+/// Unprivileged the test cannot tell which of the two outcomes to demand, so it accepts either;
+/// set `MTR_PACKET_EXPECT_NET_ADMIN=1` when the helper under test really was given the
+/// capability and the positive half of the deviation is asserted exactly, i.e. a helper that
+/// wrongly dropped `CAP_NET_ADMIN` fails here.
+#[cfg(target_os = "linux")]
+fn assert_privileges_dropped(pid: u32, path: &str) {
     let caps = capabilities_of(pid);
     let value_of = |want: &str| {
         caps.iter()
@@ -142,22 +173,34 @@ fn the_running_helper_holds_no_capabilities_beyond_a_granted_net_admin() {
         value_of("CapPrm"),
         "effective and permitted sets of {path} disagree"
     );
+}
 
-    // Closing stdin ends the loop (lib.rs `serve`), as EOF does in packet.c:131-167. Poll for
-    // the exit rather than blocking in `wait()`, so a helper that ignores EOF fails here too.
-    drop(stdin);
-    let deadline = Instant::now() + TIMEOUT;
-    let status = loop {
-        match reaper.0.try_wait() {
-            Ok(Some(s)) => break s,
-            Ok(None) => {}
-            Err(e) => panic!("waiting for {path}: {e}"),
-        }
-        assert!(
-            Instant::now() < deadline,
-            "{path} did not exit within {TIMEOUT:?} of stdin closing"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    assert!(status.success(), "{path} exited with {status}");
+/// No capabilities on FreeBSD: the drop is `setuid(getuid())`, which from euid 0 rewrites the
+/// real, effective *and* saved uid, so all three must equal ours (`ps -o ruid,uid,svuid`).
+/// Running as root that is 0 = 0 = 0, which proves little; against a setuid-root copy run as a
+/// user it proves the helper cannot get root back.
+#[cfg(not(target_os = "linux"))]
+fn assert_privileges_dropped(pid: u32, path: &str) {
+    let out = Command::new("ps")
+        // One `-o` per column: FreeBSD reads everything after the first `=` in a single
+        // `-o ruid=,uid=,svuid=` as that column's header text.
+        .args([
+            "-o",
+            "ruid=",
+            "-o",
+            "uid=",
+            "-o",
+            "svuid=",
+            "-p",
+            &pid.to_string(),
+        ])
+        .output()
+        .unwrap_or_else(|e| panic!("running ps for {path}: {e}"));
+    let text = String::from_utf8_lossy(&out.stdout);
+    let ids: Vec<&str> = text.split_whitespace().collect();
+    assert_eq!(ids.len(), 3, "unexpected ps output for {path}: {text:?}");
+    let me = nix::unistd::getuid().to_string();
+    for (which, id) in ["real", "effective", "saved"].iter().zip(&ids) {
+        assert_eq!(*id, me, "{which} uid of {path} is {id}, expected {me}");
+    }
 }

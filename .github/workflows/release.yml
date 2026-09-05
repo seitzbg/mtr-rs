@@ -66,7 +66,7 @@ jobs:
         run: |
           version=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           mkdir -p out
-          dir="mtr-rs-${version}-${{ matrix.arch }}"
+          dir="mtr-rs-${version}-${{ matrix.arch }}-linux"
           tar -C target/dist -czf "out/${dir}.tar.gz" "$dir"
           cp target/debian/mtr-rs_${version}-1_${{ matrix.debarch }}.deb out/
           ls -l out
@@ -75,11 +75,59 @@ jobs:
           name: mtr-rs-${{ matrix.arch }}
           path: out/*
 
+  # FreeBSD tarballs and pkg(8) packages, built inside a FreeBSD VM on the Ubuntu runner
+  # (see ci.yml for why pkg's rust and not rustup). The aarch64 VM is emulated, so that
+  # build takes a while; it is a tag-time cost only.
+  build-freebsd:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the tag matches the workspace version
+        if: github.event_name == 'push'
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$version" != "$tag" ]; then
+            echo "tag v$tag does not match workspace version $version" >&2
+            exit 1
+          fi
+      - uses: vmactions/freebsd-vm@f0552d3b69211736abd97f02ff3d4674c56b73b1 # v1.5.5
+        with:
+          release: "14.3"
+          arch: ${{ matrix.arch }}
+          mem: 8192
+          cpu: 4
+          prepare: |
+            pkg install -y rust bash python3
+          run: |
+            set -e
+            cargo xtask dist | tail -1 > dist-dir.txt
+            cat dist-dir.txt
+            # Sanity check: the VM shell is root, so the helper opens its raw sockets.
+            "$(cat dist-dir.txt)/bin/mtr-rs" --version
+            printf '1 check-support feature version\n' | "$(cat dist-dir.txt)/bin/mtr-rs-packet"
+            pkgfile=$(sh scripts/build-freebsd-pkg.sh | tail -1)
+            mkdir -p out
+            dir=$(basename "$(cat dist-dir.txt)")
+            tar -C target/dist -czf "out/${dir}.tar.gz" "$dir"
+            cp "$pkgfile" "out/$(basename "$pkgfile" .pkg)-${{ matrix.arch }}-freebsd.pkg"
+            ls -l out
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mtr-rs-freebsd-${{ matrix.arch }}
+          path: out/*
+
   # Split out of `build` so that only this job holds a write-scoped token. The condition
   # is the one the upload step carried before: tags only, and a `workflow_dispatch` run
   # publishes nothing unless it is explicitly told `dry_run: false`.
   publish:
-    needs: build
+    needs: [build, build-freebsd]
     if: startsWith(github.ref, 'refs/tags/') && (github.event_name == 'push' || inputs.dry_run != 'true')
     runs-on: ubuntu-latest
     permissions:

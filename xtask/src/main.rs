@@ -33,7 +33,7 @@ enum Cmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Release build + man + completions laid out under target/dist/mtr-rs-<version>-<arch>/
+    /// Release build + man + completions laid out under target/dist/mtr-rs-<version>-<arch>-<os>/
     Dist {
         /// Reuse the existing target/release binaries instead of running cargo build
         #[arg(long)]
@@ -59,9 +59,15 @@ pub fn arch() -> &'static str {
     std::env::consts::ARCH
 }
 
+/// Target OS as Cargo names it (linux, freebsd, …). Part of the tarball name since the
+/// FreeBSD builds: an `x86_64` tarball alone no longer says which kernel it is for.
+pub fn os() -> &'static str {
+    std::env::consts::OS
+}
+
 /// The tarball's top-level directory (and, with `.tar.gz` appended, the tarball's own name).
 pub fn dist_dir_name() -> String {
-    format!("mtr-rs-{}-{}", version(), arch())
+    format!("mtr-rs-{}-{}-{}", version(), arch(), os())
 }
 
 /// Repository files copied verbatim into the root of the dist tree. GPL-2.0 §1/§3 require the
@@ -269,7 +275,11 @@ mod tests {
     #[test]
     fn dist_layout_names_are_stable() {
         assert!(matches!(arch(), "x86_64" | "aarch64" | "arm" | "riscv64"));
-        assert_eq!(dist_dir_name(), format!("mtr-rs-{}-{}", version(), arch()));
+        assert!(matches!(os(), "linux" | "freebsd" | "macos"));
+        assert_eq!(
+            dist_dir_name(),
+            format!("mtr-rs-{}-{}-{}", version(), arch(), os())
+        );
         assert!(dist_dir_name().starts_with("mtr-rs-"));
     }
 

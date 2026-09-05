@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
-# Install (or remove) mtr-rs: both binaries, man pages, completions, and the capability
-# mtr-rs-packet needs for raw sockets.
+# Install (or remove) mtr-rs: both binaries, man pages, completions, and the privilege
+# mtr-rs-packet needs for raw sockets: cap_net_raw on Linux, setuid root on FreeBSD.
 #
 #   scripts/install.sh [--prefix DIR] [--no-build] [--no-setcap] [--uninstall]
 #
-# Defaults: --prefix /usr/local. Root is needed only for a system prefix and for setcap, so
-# a system install is two phases: build the artefacts as yourself, then copy them as root:
+# Defaults: --prefix /usr/local. Root is needed only for a system prefix and for the privilege
+# grant, so a system install is two phases: build the artefacts as yourself, then copy them as
+# root:
 #
 #   cargo build --release --workspace && cargo xtask dist
 #   sudo scripts/install.sh --no-build
@@ -27,13 +28,15 @@ while [ $# -gt 0 ]; do
     --uninstall) uninstall=1; shift ;;
     -h|--help)
       cat <<'EOF'
-Install (or remove) mtr-rs: both binaries, man pages, completions, and the capability
-mtr-rs-packet needs for raw sockets.
+Install (or remove) mtr-rs: both binaries, man pages, completions, and the privilege
+mtr-rs-packet needs for raw sockets: cap_net_raw on Linux, setuid root on FreeBSD
+(--no-setcap skips that step on either).
 
   scripts/install.sh [--prefix DIR] [--no-build] [--no-setcap] [--uninstall]
 
-Defaults: --prefix /usr/local. Root is needed only for a system prefix and for setcap, so
-a system install is two phases: build the artefacts as yourself, then copy them as root:
+Defaults: --prefix /usr/local. Root is needed only for a system prefix and for the privilege
+grant, so a system install is two phases: build the artefacts as yourself, then copy them as
+root:
 
   cargo build --release --workspace && cargo xtask dist
   sudo scripts/install.sh --no-build
@@ -128,15 +131,31 @@ install -m 644 "$root/target/dist/completions/_mtr-rs" "$zshdir/_mtr-rs"
 install -m 644 "$root/target/dist/completions/mtr-rs.fish" "$fishdir/mtr-rs.fish"
 for f in "${files[@]}"; do echo "installed $f"; done
 
-if [ "$setcap" = 1 ]; then
-  if command -v setcap >/dev/null 2>&1 && setcap cap_net_raw+ep "$bindir/mtr-rs-packet"; then
-    echo "granted cap_net_raw to $bindir/mtr-rs-packet"
-  else
-    cat >&2 <<EOF
+[ "$setcap" = 1 ] || exit 0
+case "$(uname -s)" in
+  Linux)
+    if command -v setcap >/dev/null 2>&1 && setcap cap_net_raw+ep "$bindir/mtr-rs-packet"; then
+      echo "granted cap_net_raw to $bindir/mtr-rs-packet"
+    else
+      cat >&2 <<EOF
 install.sh: could not grant cap_net_raw (see any setcap error above; usually a missing setcap
 or not root). mtr-rs-packet still works on
 its unprivileged fallback; for raw sockets (MPLS labels, TCP/SCTP hop discovery) run:
     sudo setcap cap_net_raw+ep $bindir/mtr-rs-packet
 EOF
-  fi
-fi
+    fi ;;
+  FreeBSD)
+    # No capabilities and no unprivileged fallback here: raw sockets need root, so the helper
+    # is setuid root and drops back to the invoking user once its sockets are open.
+    if [ "$(id -u)" = 0 ] && chown root:wheel "$bindir/mtr-rs-packet" && chmod 4755 "$bindir/mtr-rs-packet"; then
+      echo "made $bindir/mtr-rs-packet setuid root"
+    else
+      cat >&2 <<EOF
+install.sh: not root, so $bindir/mtr-rs-packet is not setuid; without that only root can run
+mtr-rs. To fix it later:
+    sudo chown root:wheel $bindir/mtr-rs-packet && sudo chmod 4755 $bindir/mtr-rs-packet
+EOF
+    fi ;;
+  *)
+    echo "install.sh: no privilege grant known for $(uname -s); run mtr-rs as root" >&2 ;;
+esac

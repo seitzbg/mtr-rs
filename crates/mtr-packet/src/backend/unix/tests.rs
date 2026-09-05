@@ -1,4 +1,4 @@
-//! Loopback and byte-level tests for the Linux backend (send_probe/receive round trips,
+//! Loopback and byte-level tests for the Unix backend (send_probe/receive round trips,
 //! error paths, MPLS decode). Split out of mod.rs; ported from packet/probe_unix.c (mtr 0.96,
 //! commit 7b01773). GPL-2.0-only.
 
@@ -13,36 +13,38 @@ use std::time::Duration;
 /// artifact (a real mtr-packet is one process with one backend), so the tests take turns.
 static PROBE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// A `LinuxBackend` that holds the turn for as long as the test body does.
+/// A `UnixBackend` that holds the turn for as long as the test body does.
 struct TestBackend {
-    backend: LinuxBackend,
+    backend: UnixBackend,
     _turn: std::sync::MutexGuard<'static, ()>,
 }
 
 impl std::ops::Deref for TestBackend {
-    type Target = LinuxBackend;
-    fn deref(&self) -> &LinuxBackend {
+    type Target = UnixBackend;
+    fn deref(&self) -> &UnixBackend {
         &self.backend
     }
 }
 
 impl std::ops::DerefMut for TestBackend {
-    fn deref_mut(&mut self) -> &mut LinuxBackend {
+    fn deref_mut(&mut self) -> &mut UnixBackend {
         &mut self.backend
     }
 }
 
 /// A real backend for the loopback tests, or `None` when this machine has neither
-/// `cap_net_raw` nor open ping sockets for `version` — then the caller returns early
-/// instead of failing (Global Constraints). Every test below starts with
+/// `cap_net_raw` nor open ping sockets for `version` (Linux), or is not root (FreeBSD) — then
+/// the caller returns early instead of failing (Global Constraints). Every test below starts with
 /// `let Some(mut b) = backend(4) else { return };`.
 fn backend(version: u8) -> Option<TestBackend> {
     let turn = PROBE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    if !sockets::dgram_available(version) {
-        eprintln!("skipping: no IPv{version} probe sockets (need cap_net_raw or ping sockets)");
+    if !sockets::probe_sockets_available(version) {
+        eprintln!(
+            "skipping: no IPv{version} probe sockets (need cap_net_raw, ping sockets or root)"
+        );
         return None;
     }
-    let mut backend = LinuxBackend::open_privileged().ok()?;
+    let mut backend = UnixBackend::open_privileged().ok()?;
     backend.finish_init().unwrap();
     Some(TestBackend {
         backend,
@@ -52,7 +54,7 @@ fn backend(version: u8) -> Option<TestBackend> {
 
 /// Poll the backend until `pred` holds or `budget` elapses.
 fn pump(
-    b: &mut LinuxBackend,
+    b: &mut UnixBackend,
     t: &mut ProbeTable,
     budget: Duration,
     mut pred: impl FnMut(&[Response]) -> bool,

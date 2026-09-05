@@ -1,25 +1,31 @@
-//! ICMP/UDP datagram send and receive for the Linux backend: raw sockets and the DGRAM +
-//! IP_RECVERR fallback. Split out of mod.rs; ported from packet/probe_unix.c (mtr 0.96,
+//! ICMP/UDP datagram send and receive for the Unix backend: raw sockets, and on Linux the
+//! DGRAM + IP_RECVERR fallback. Split out of mod.rs; ported from packet/probe_unix.c (mtr 0.96,
 //! commit 7b01773). GPL-2.0-only.
 
 use std::net::IpAddr;
 use std::os::fd::AsRawFd;
 use std::time::Instant;
 
-use mtr_proto::{CProbeParams, ProbeResult, Protocol, Response};
+#[cfg(target_os = "linux")]
+use mtr_proto::ProbeResult;
+use mtr_proto::{CProbeParams, Protocol, Response};
 use socket2::{SockAddr, Socket};
 
-use super::LinuxBackend;
+use super::UnixBackend;
+#[cfg(target_os = "linux")]
+use super::construct::{self, UDP_HEADER};
 use super::construct::{
-    self, PACKET_BUFFER_SIZE, UDP_HEADER, icmp_echo, packet_size, udp_datagram, udp_ports,
-    udp_source_port_from_pid,
+    PACKET_BUFFER_SIZE, icmp_echo, packet_size, udp_datagram, udp_ports, udp_source_port_from_pid,
 };
-use super::deconstruct::{self, Inner, Parsed, parse_icmp4, parse_icmp6};
+#[cfg(target_os = "linux")]
+use super::deconstruct::{self, Inner, Parsed};
+use super::deconstruct::{parse_icmp4, parse_icmp6};
+#[cfg(target_os = "linux")]
 use super::errqueue::{self, QueuedError};
 use super::sockets::{Family, apply_probe_options};
 use crate::probe_table::{Probe, ProbeTable};
 
-impl LinuxBackend {
+impl UnixBackend {
     /// `construct_packet()` + `send_packet()` for ICMP and UDP (construct_unix.c:832-872,
     /// probe_unix.c:47-123). The buffer starts out filled with the bit pattern
     /// (construct_unix.c:855) and each builder overwrites only its own header. Stream
@@ -108,6 +114,7 @@ impl LinuxBackend {
         use nix::sys::socket::{SockaddrStorage, recvfrom};
         let version = family.version;
         let mut buf = vec![0u8; PACKET_BUFFER_SIZE];
+        #[cfg(target_os = "linux")]
         let mut err_buf = vec![0u8; PACKET_BUFFER_SIZE];
         loop {
             match recvfrom::<SockaddrStorage>(sock.as_raw_fd(), &mut buf) {
@@ -134,29 +141,37 @@ impl LinuxBackend {
                     // queue itself before giving up; an empty queue is `Ok(None)` and ends the
                     // turn. `Unreachable` is the fallback only if the cmsg carries no ICMP
                     // origin, in which case we know nothing better.
-                    if family.is_raw() {
-                        return Ok(());
-                    }
-                    // No cmsg means no ICMP code either, so the fallback carries code 0.
-                    match errqueue::read_error(
-                        sock,
-                        &mut err_buf,
-                        QueuedError::Unreachable { code: 0 },
-                    )? {
-                        Some((offender, n, kind)) => self.deliver_queued(
+                    #[cfg(target_os = "linux")]
+                    if !family.is_raw() {
+                        // No cmsg means no ICMP code either, so the fallback carries code 0.
+                        match errqueue::read_error(
                             sock,
-                            table,
-                            version,
-                            offender,
-                            &err_buf[..n],
-                            kind,
-                            now,
-                            out,
-                        ),
-                        None => return Ok(()),
+                            &mut err_buf,
+                            QueuedError::Unreachable { code: 0 },
+                        )? {
+                            Some((offender, n, kind)) => {
+                                self.deliver_queued(
+                                    sock,
+                                    table,
+                                    version,
+                                    offender,
+                                    &err_buf[..n],
+                                    kind,
+                                    now,
+                                    out,
+                                );
+                                continue;
+                            }
+                            None => return Ok(()),
+                        }
                     }
+                    // A raw socket has no error queue: drained means done.
+                    return Ok(());
                 }
                 Err(nix::errno::Errno::EINTR) => continue,
+                // Only a DGRAM socket reports a queued ICMP error through `recvfrom`; a raw
+                // socket is unconnected and never sees these, so the arm is Linux only.
+                #[cfg(target_os = "linux")]
                 Err(e @ (nix::errno::Errno::EHOSTUNREACH | nix::errno::Errno::ECONNREFUSED)) => {
                     // The errno is only a first guess; Task 11 refines it from the cmsg.
                     let fallback = if e == nix::errno::Errno::EHOSTUNREACH {
@@ -187,6 +202,7 @@ impl LinuxBackend {
 
     /// `handle_error_queue_packet()` (deconstruct_unix.c:127-146). C picks the branch from the send socket's `SO_PROTOCOL`
     /// (probe_unix.c:824-828); `Socket::protocol()` is the same `getsockopt`.
+    #[cfg(target_os = "linux")]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn deliver_queued(
         &self,
@@ -252,6 +268,7 @@ impl LinuxBackend {
 /// matcher already understands: `Refused` is a port-unreachable (code 3 on v4, 4 on v6) and
 /// therefore `reply` (pre-flight ruling 3), and anything else unreachable is
 /// `no-route-host`.
+#[cfg(target_os = "linux")]
 fn queued_icmp_kind(kind: QueuedError, version: u8) -> deconstruct::IcmpKind {
     match kind {
         QueuedError::TimeExceeded => deconstruct::IcmpKind::TimeExceeded,
