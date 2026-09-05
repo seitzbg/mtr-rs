@@ -60,7 +60,9 @@ pub fn find_local_address(target: IpAddr, mark: u32) -> Result<Option<IpAddr>, S
     #[cfg(target_os = "linux")]
     if mark != 0 {
         sock.set_mark(mark).map_err(|e| {
-            format!("setsockopt SO_MARK failed: {e} (--mark needs CAP_NET_ADMIN: run mtr as root)")
+            format!(
+                "setsockopt SO_MARK failed: {e} (--mark needs CAP_NET_ADMIN: run mtr-rs as root)"
+            )
         })?;
     }
     #[cfg(not(target_os = "linux"))]

@@ -73,17 +73,25 @@ pub struct Helper {
 }
 
 /// Path to the marker file that indicates mtr is running under `sudo` (`ui/mtr.c:717-721` and
-/// `execute_packet_child()`). When present, `$MTR_PACKET` is ignored and `-F` is refused.
+/// `execute_packet_child()`). When present, every caller-controlled filesystem path is refused
+/// and helper discovery uses absolute, installation-controlled paths only.
 pub const SUDO_GUARD_FILE: &str = "/etc/mtr.is.run.under.sudo";
+
+/// Fixed helper locations used under the sudo guard. The `bin` entries cover this project's
+/// source, Debian and FreeBSD installs; the `sbin` entries preserve fallback to distributions
+/// that classify the C helper as an administration command.
+const SYSTEM_HELPER_DIRS: [&str; 4] =
+    ["/usr/local/bin", "/usr/local/sbin", "/usr/bin", "/usr/sbin"];
 
 /// Whether the sudo marker file exists.
 pub fn sudo_guard_present() -> bool {
     Path::new(SUDO_GUARD_FILE).exists()
 }
 
-/// `execute_packet_child()`: `$MTR_PACKET` (ignored when `/etc/mtr.is.run.under.sudo` exists),
-/// `mtr-rs-packet` on `PATH`, next to our own executable, `./mtr-rs-packet`, and finally the C
-/// `mtr-packet` on `PATH`.
+/// `execute_packet_child()`: ordinarily `$MTR_PACKET`, `mtr-rs-packet` on `PATH`, next to our own
+/// executable, `./mtr-rs-packet`, and finally the C `mtr-packet` on `PATH`. Under the sudo guard,
+/// `$MTR_PACKET`, `PATH` and the current directory are all untrusted, so only absolute paths next
+/// to this executable and in [`SYSTEM_HELPER_DIRS`] are returned.
 pub fn candidates() -> Vec<PathBuf> {
     candidates_from(
         std::env::var_os("MTR_PACKET"),
@@ -94,19 +102,38 @@ pub fn candidates() -> Vec<PathBuf> {
     )
 }
 
-/// Pure core of [`candidates`]: the C search order given an explicit `$MTR_PACKET` value, sudo
-/// guard state and executable directory, without touching the environment or filesystem. The
-/// C helper (`mtr-packet`) comes last, after every `mtr-rs-packet` location.
+/// Pure core of [`candidates`]: the normal C-compatible search order, or the absolute-only guarded
+/// order, given explicit inputs and without touching the environment or filesystem. The C helper
+/// (`mtr-packet`) comes last, after every `mtr-rs-packet` location.
 pub fn candidates_from(
     mtr_packet_env: Option<std::ffi::OsString>,
     guard_present: bool,
     exe_dir: Option<PathBuf>,
 ) -> Vec<PathBuf> {
     let mut v = Vec::new();
-    if !guard_present {
-        if let Some(p) = mtr_packet_env {
-            v.push(PathBuf::from(p));
+    let push_unique = |v: &mut Vec<PathBuf>, p: PathBuf| {
+        if !v.contains(&p) {
+            v.push(p);
         }
+    };
+    if guard_present {
+        let exe_dir = exe_dir.filter(|p| p.is_absolute());
+        if let Some(dir) = &exe_dir {
+            push_unique(&mut v, dir.join(HELPER));
+        }
+        for dir in SYSTEM_HELPER_DIRS {
+            push_unique(&mut v, Path::new(dir).join(HELPER));
+        }
+        if let Some(dir) = &exe_dir {
+            push_unique(&mut v, dir.join(C_HELPER));
+        }
+        for dir in SYSTEM_HELPER_DIRS {
+            push_unique(&mut v, Path::new(dir).join(C_HELPER));
+        }
+        return v;
+    }
+    if let Some(p) = mtr_packet_env {
+        v.push(PathBuf::from(p));
     }
     v.push(PathBuf::from(HELPER));
     if let Some(dir) = exe_dir {
@@ -363,8 +390,12 @@ mod tests {
     #[test]
     fn candidate_order_matches_execute_packet_child() {
         let c = candidates();
-        assert_eq!(c.last().unwrap(), &PathBuf::from("mtr-packet"));
-        assert!(c.iter().any(|p| p == &PathBuf::from(HELPER)));
+        if sudo_guard_present() {
+            assert!(c.iter().all(|p| p.is_absolute()), "{c:?}");
+        } else {
+            assert_eq!(c.last().unwrap(), &PathBuf::from("mtr-packet"));
+            assert!(c.iter().any(|p| p == &PathBuf::from(HELPER)));
+        }
     }
 
     #[test]
@@ -387,14 +418,45 @@ mod tests {
     }
 
     #[test]
-    fn candidates_from_guard_present_drops_env_and_leads_with_our_helper() {
+    fn candidates_from_guard_present_uses_only_absolute_trusted_locations() {
         let c = candidates_from(
             Some(std::ffi::OsString::from("/opt/mtr-rs-packet")),
             true,
-            None,
+            Some(PathBuf::from("/opt/mtr/bin")),
         );
         assert!(!c.contains(&PathBuf::from("/opt/mtr-rs-packet")));
-        assert_eq!(c.first().unwrap(), &PathBuf::from("mtr-rs-packet"));
+        assert_eq!(
+            c.first().unwrap(),
+            &PathBuf::from("/opt/mtr/bin/mtr-rs-packet")
+        );
+        assert!(c.iter().all(|p| p.is_absolute()), "{c:?}");
+        assert!(!c.contains(&PathBuf::from("mtr-rs-packet")));
+        assert!(!c.contains(&PathBuf::from("./mtr-rs-packet")));
+        assert_eq!(
+            c,
+            vec![
+                PathBuf::from("/opt/mtr/bin/mtr-rs-packet"),
+                PathBuf::from("/usr/local/bin/mtr-rs-packet"),
+                PathBuf::from("/usr/local/sbin/mtr-rs-packet"),
+                PathBuf::from("/usr/bin/mtr-rs-packet"),
+                PathBuf::from("/usr/sbin/mtr-rs-packet"),
+                PathBuf::from("/opt/mtr/bin/mtr-packet"),
+                PathBuf::from("/usr/local/bin/mtr-packet"),
+                PathBuf::from("/usr/local/sbin/mtr-packet"),
+                PathBuf::from("/usr/bin/mtr-packet"),
+                PathBuf::from("/usr/sbin/mtr-packet"),
+            ]
+        );
+    }
+
+    #[test]
+    fn guarded_candidates_ignore_a_relative_executable_directory() {
+        let c = candidates_from(None, true, Some(PathBuf::from("relative/bin")));
+        assert!(c.iter().all(|p| p.is_absolute()), "{c:?}");
+        assert_eq!(
+            c.first().unwrap(),
+            &PathBuf::from("/usr/local/bin/mtr-rs-packet")
+        );
     }
 
     #[test]

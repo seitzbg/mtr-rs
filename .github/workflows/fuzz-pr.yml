@@ -5,7 +5,7 @@ on:
   pull_request:
     paths:
       - "crates/mtr-proto/**"
-      - "crates/mtr-packet/src/backend/linux/deconstruct.rs"
+      - "crates/mtr-packet/src/backend/unix/deconstruct.rs"
       - "crates/mtr-packet/fuzz/**"
       - ".github/workflows/fuzz-pr.yml"
 

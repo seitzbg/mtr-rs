@@ -1153,11 +1153,33 @@ mod tests {
         } else {
             assert!(o.unwrap_err().contains("only supported on Linux"));
         }
+        let o = parse(&[
+            "-c",
+            "2147483647",
+            "-U",
+            "2147483647",
+            "-Z",
+            "2147483647",
+            "--cache",
+            "2147483647",
+            "h",
+        ])
+        .into_options(true)
+        .unwrap();
+        assert_eq!(
+            (o.config.max_ping, o.config.max_unknown),
+            (i32::MAX as u32, i32::MAX as u32)
+        );
+        assert_eq!(o.config.probe_timeout, Duration::from_secs(i32::MAX as u64));
+        assert_eq!(
+            o.config.cache_timeout,
+            Some(Duration::from_secs(i32::MAX as u64))
+        );
+        assert!(o.config.force_max_ping);
         let o = parse(&["-c", "0", "-U", "1", "h"])
             .into_options(true)
             .unwrap();
         assert_eq!((o.config.max_ping, o.config.max_unknown), (0, 1));
-        assert!(o.config.force_max_ping);
     }
 
     /// C's getopt(3) takes the option argument of `-M -1` verbatim, so the value has to reach

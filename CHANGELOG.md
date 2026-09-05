@@ -21,6 +21,16 @@ All notable changes to mtr-rs are documented here. The format follows
 - The helper's privilege hints name the fix for the running OS: `setcap` and `ping_group_range` on
   Linux, `chmod u+s` on FreeBSD.
 
+### Fixed
+- `--init-config` rejects `max_unknown` and `timeout` values above the runtime's integer range
+  instead of writing a configuration that the next invocation cannot use.
+- Pull requests that change the shared Unix ICMP parser trigger the parser fuzz smoke workflow
+  after the backend's `linux` to `unix` rename.
+
+### Security
+- Under the sudo marker, helper discovery no longer searches `PATH` or the current directory; it
+  uses only absolute paths beside the running client or in the standard installation directories.
+
 ## [0.2.1] - 2026-09-04
 
 ### Changed
