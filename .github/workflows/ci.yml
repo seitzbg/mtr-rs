@@ -112,7 +112,9 @@ jobs:
   # macOS on GitHub's own runner (Apple silicon). Tests run under sudo so the helper opens real
   # raw sockets and the loopback probe tests execute; `sudo -E` keeps HOME, so the rustup proxy
   # and the cargo cache stay the runner user's. The privilege tests then see uid 0 = 0 = 0, which
-  # is the same as the FreeBSD VM. Intel is release-only (see release.yml).
+  # is the same as the FreeBSD VM. The sudo step comes last: it leaves root-owned test binaries
+  # under target/, which a later user-level `cargo xtask` could not overwrite. Intel is
+  # release-only (see release.yml).
   macos:
     runs-on: macos-latest
     steps:
@@ -122,12 +124,12 @@ jobs:
           toolchain: stable
           components: clippy
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: sudo -E "$(command -v cargo)" test --workspace
-        env:
-          INSTA_UPDATE: "no"
       - run: cargo build --release --workspace
       - run: cargo xtask dist --no-build
       - run: scripts/tests/install-roundtrip.sh
+      - run: sudo -E "$(command -v cargo)" test --workspace
+        env:
+          INSTA_UPDATE: "no"
 
   # FreeBSD, in a VM on the Ubuntu runner (GitHub has no FreeBSD runners). The VM's shell is
   # root, so mtr-rs-packet opens real raw sockets and the loopback probe tests run for real
