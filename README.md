@@ -209,8 +209,14 @@ User-visible changes go in `CHANGELOG.md` in the same commit; plans in `ROADMAP.
    `Cargo.lock` follows, and commit.
 2. `git tag v<version> && git push --tags`; the job fails unless the tag is that version with a
    leading `v`.
-3. The `release` workflow builds x86_64 and aarch64, runs `scripts/check-deb.sh` and attaches the
-   tarballs and `.deb`s; `workflow_dispatch` with `dry_run: "true"` skips the release itself.
+3. The `release` workflow builds every platform, runs `scripts/check-deb.sh` and
+   `scripts/build-freebsd-pkg.sh`, and attaches the tarballs, `.deb`s and `.pkg`;
+   `workflow_dispatch` with `dry_run: "true"` skips the release itself.
+4. Its last job regenerates the Homebrew formula from the published tarballs and pushes it to
+   [seitzbg/homebrew-mtr-rs](https://github.com/seitzbg/homebrew-mtr-rs). That needs the
+   `HOMEBREW_TAP_TOKEN` repository secret: a fine-grained personal access token for the tap
+   repository with Contents read and write. Without it the job warns and skips, and
+   `scripts/homebrew-formula.sh <version>` produces the same file by hand.
 
 ## Credits
 

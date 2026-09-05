@@ -196,3 +196,45 @@ jobs:
         with:
           files: out/*
           generate_release_notes: true
+
+  # Point the Homebrew tap (seitzbg/homebrew-mtr-rs) at the release just published. Pushing to
+  # another repository needs a token of its own: HOMEBREW_TAP_TOKEN, a fine-grained PAT scoped to
+  # the tap with Contents read/write. Without it the step warns and the release stands as it is;
+  # `scripts/homebrew-formula.sh <version>` then does the same by hand.
+  homebrew:
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/') && (github.event_name == 'push' || inputs.dry_run != 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Is the tap token configured?
+        id: token
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo present=true >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set; the Homebrew tap was not updated"
+            echo present=false >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.token.outputs.present == 'true'
+        with:
+          repository: seitzbg/homebrew-mtr-rs
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Regenerate the formula from the published tarballs and push it
+        if: steps.token.outputs.present == 'true'
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          scripts/homebrew-formula.sh "$version" > tap/Formula/mtr-rs.rb
+          cd tap
+          git config user.name "Bryan Seitz"
+          git config user.email "171158+seitzbg@users.noreply.github.com"
+          git add Formula/mtr-rs.rb
+          git diff --cached --quiet && { echo "formula already at $version"; exit 0; }
+          git commit -m "mtr-rs $version"
+          git push
