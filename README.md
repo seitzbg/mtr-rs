@@ -24,9 +24,8 @@ sockets are open).
     sudo chown root:wheel "$(brew --prefix)/opt/mtr-rs/bin/mtr-rs-packet"   # repeat after upgrades
     sudo chmod u+s "$(brew --prefix)/opt/mtr-rs/bin/mtr-rs-packet"
 
-    # macOS: tarball (unsigned; clear the quarantine flag Gatekeeper adds to downloads)
+    # macOS: tarball (the binaries are signed and notarized, so Gatekeeper lets them run)
     tar xzf mtr-rs-0.3.0-aarch64-macos.tar.gz && cd mtr-rs-0.3.0-aarch64-macos
-    xattr -d com.apple.quarantine bin/* 2>/dev/null
     sudo install -m 755 bin/mtr-rs bin/mtr-rs-packet /usr/local/bin/
     sudo install -m 644 man/*.8 /usr/local/share/man/man8/
     sudo chown root:wheel /usr/local/bin/mtr-rs-packet && sudo chmod u+s /usr/local/bin/mtr-rs-packet
@@ -59,6 +58,8 @@ each file, so a download can be checked against what the release workflow actual
 
     sha256sum -c --ignore-missing SHA256SUMS                 # shasum -a 256 -c on macOS
     gh attestation verify mtr-rs-0.3.0-x86_64-linux.tar.gz --repo seitzbg/mtr-rs
+    codesign --verify --strict --verbose=2 bin/mtr-rs        # macOS: Developer ID signature
+    spctl --assess --type execute --verbose=2 bin/mtr-rs     # macOS: Gatekeeper's verdict (notarized)
 
 Neither package declares a conflict with the distribution's `mtr`, so it can stay installed.
 `--uninstall` removes exactly what it installed, given the same `--prefix`. A failing privilege
@@ -229,7 +230,10 @@ User-visible changes go in `CHANGELOG.md` in the same commit; plans in `ROADMAP.
 3. The `release` workflow builds every platform, runs `scripts/check-deb.sh` and
    `scripts/build-freebsd-pkg.sh`, and attaches the tarballs, `.deb`s and `.pkg` together with a
    `SHA256SUMS` file and a build-provenance attestation for each asset (`gh attestation verify`);
-   `workflow_dispatch` with `dry_run: "true"` skips the release itself.
+   `workflow_dispatch` with `dry_run: "true"` skips the release itself. The macOS binaries are
+   signed with a Developer ID certificate and notarized when the five `APPLE_*` secrets are set
+   (see the comment on `build-macos` in `.github/workflows/release.yml`); without them the job
+   warns and ships them unsigned.
 4. Its last job regenerates the Homebrew formula from the published `SHA256SUMS` and pushes it to
    [seitzbg/homebrew-mtr-rs](https://github.com/seitzbg/homebrew-mtr-rs). That needs the
    `HOMEBREW_TAP_TOKEN` repository secret: a fine-grained personal access token for the tap
