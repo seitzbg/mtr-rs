@@ -234,10 +234,10 @@ impl UiState {
                 });
             }
             UiAction::PromptChar(c) => {
-                if let Some(p) = &mut self.prompt {
-                    if p.buf.chars().count() < MAX_PROMPT_LEN {
-                        p.buf.push(c);
-                    }
+                if let Some(p) = &mut self.prompt
+                    && p.buf.chars().count() < MAX_PROMPT_LEN
+                {
+                    p.buf.push(c);
                 }
             }
             UiAction::PromptBackspace => {

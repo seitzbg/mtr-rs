@@ -21,8 +21,9 @@ pub enum UserAction {
     ToggleDns,
     ToggleAsn,
     ToggleMpls,
-    /// New probe interval in milliseconds.
-    SetInterval(u32),
+    /// New probe interval in milliseconds. Wide enough for the CLI's one-year ceiling
+    /// (`mtr::cli::MAX_SECONDS`), which overflows `u32` milliseconds at about 49.7 days.
+    SetInterval(u64),
     SetPacketSize(i32),
     SetBitPattern(i32),
     SetTos(u8),
@@ -217,10 +218,10 @@ impl Engine {
             }
             return;
         }
-        if let Some(t) = self.next_send {
-            if now < t {
-                return;
-            }
+        if let Some(t) = self.next_send
+            && now < t
+        {
+            return;
         }
         if self.num_ping >= self.cfg.max_ping && (!self.cfg.interactive || self.cfg.force_max_ping)
         {
@@ -418,7 +419,7 @@ impl Engine {
                     self.cfg.ipinfo_fields.clear();
                 }
             }
-            UserAction::SetInterval(ms) => self.cfg.interval = f64::from(ms.max(1)) / 1000.0,
+            UserAction::SetInterval(ms) => self.cfg.interval = ms.max(1) as f64 / 1000.0,
             UserAction::SetPacketSize(n) => self.cfg.packet_size = n,
             UserAction::SetBitPattern(n) => self.cfg.bit_pattern = n,
             UserAction::SetTos(t) => self.cfg.tos = t,

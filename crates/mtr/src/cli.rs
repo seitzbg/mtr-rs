@@ -102,15 +102,14 @@ fn parse_port(s: &str) -> Result<u16, String> {
 /// `split_target_port()` (ui/mtr.c:200-234). Callers skip it for ICMP.
 pub fn split_target_port(name: &str) -> Result<Target, String> {
     if let Some(rest) = name.strip_prefix('[') {
-        if let Some(close) = rest.find(']') {
-            if let Some(port) = rest[close + 1..].strip_prefix(':') {
-                if !port.is_empty() {
-                    return Ok(Target {
-                        name: rest[..close].to_string(),
-                        port: parse_port(port)?,
-                    });
-                }
-            }
+        if let Some(close) = rest.find(']')
+            && let Some(port) = rest[close + 1..].strip_prefix(':')
+            && !port.is_empty()
+        {
+            return Ok(Target {
+                name: rest[..close].to_string(),
+                port: parse_port(port)?,
+            });
         }
         return Ok(Target {
             name: name.to_string(),

@@ -50,6 +50,17 @@ jobs:
       - name: Build and check the .deb
         run: scripts/check-deb.sh
 
+  # The declared `rust-version` is only honoured if something builds on it: stable CI would
+  # accept a let-chain or a dependency bump that quietly raised the real floor.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: "1.88"
+      - run: cargo check --workspace --all-targets --all-features
+
   # The upstream Python helper suites (test/{cmdparse,param,probe}.py from the C repo)
   # run against our helper. The runner image ships a C `mtr-packet` at the wrapper's
   # default /usr/bin/mtr-packet, so the ours-vs-baseline comparison does cancel

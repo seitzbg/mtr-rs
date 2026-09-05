@@ -47,14 +47,14 @@ pub fn rows(view: &View) -> Vec<TableRow> {
             kind: RowKind::Hop,
         });
         let primary = hop.addrs.iter().position(|a| Some(a.addr) == hop.addr);
-        if cfg.mpls {
-            if let Some(pi) = primary {
-                for label in 0..hop.addrs[pi].mpls.len() {
-                    out.push(TableRow {
-                        at,
-                        kind: RowKind::Mpls { addr: pi, label },
-                    });
-                }
+        if cfg.mpls
+            && let Some(pi) = primary
+        {
+            for label in 0..hop.addrs[pi].mpls.len() {
+                out.push(TableRow {
+                    at,
+                    kind: RowKind::Mpls { addr: pi, label },
+                });
             }
         }
         // curses.c:518-530: at most maxDisplayPath - 1 extra addresses, the primary skipped

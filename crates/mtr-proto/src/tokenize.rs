@@ -59,7 +59,7 @@ pub fn tokenize(line: &str) -> Result<Line<'_>, ParseError> {
     if toks.len() > MAX_ARGUMENTS * 2 + 2 {
         return Err(ParseError::TooManyArguments);
     }
-    if (toks.len() - 2) % 2 != 0 {
+    if !(toks.len() - 2).is_multiple_of(2) {
         return Err(ParseError::DanglingKey);
     }
     let token = parse_token(toks[0])?;

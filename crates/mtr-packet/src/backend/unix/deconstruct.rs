@@ -362,7 +362,7 @@ mod tests {
         options: &[u8],
     ) -> Vec<u8> {
         let mut opts = options.to_vec();
-        while opts.len() % 4 != 0 {
+        while !opts.len().is_multiple_of(4) {
             opts.push(1); // NOP
         }
         let mut h = ip4(proto, src, dst, payload_len + opts.len());

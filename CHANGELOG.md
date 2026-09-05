@@ -15,10 +15,18 @@ All notable changes to mtr-rs are documented here. The format follows
   walkthrough covering every probe mode with its expected output.
 
 ### Changed
+- The declared minimum Rust version is 1.88. The `Cargo.toml` said 1.85, but the config-file
+  merge uses let-chains (stable since 1.88) and ratatui 0.30 and hickory 0.26 require 1.88 too,
+  so a 1.85 build never worked. CI now checks the workspace on 1.88 so the floor stays true.
 - FreeBSD release binaries are x86_64 only; aarch64 builds and tests from source but the emulated
   release build took over an hour per tag.
 - The FreeBSD CI job no longer copies the workspace back out of the VM (a spurious `rsync`
   failure after every test had passed).
+
+### Fixed
+- The TUI interval prompt stored milliseconds as `u32`, so any value above about 49.7 days was
+  silently clamped even though it was accepted up to the one-year ceiling. The action now carries
+  `u64` milliseconds.
 
 ## [0.3.0] - 2026-09-05
 
