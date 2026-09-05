@@ -351,7 +351,9 @@ async fn run_target(
                 glyphs: tui::Glyphs::select(opts.ascii),
                 sparkline: opts.sparkline,
                 detail_pane: opts.detail_pane,
-                palette: tui::Palette::detect(opts.color).with_rtt_thresholds(opts.rtt_thresholds),
+                palette: tui::Palette::detect(opts.color)
+                    .with_rtt_thresholds(opts.rtt_thresholds)
+                    .with_theme(opts.theme),
                 is_root,
                 local_hostname: &local_hostname,
                 target_name: &t.name,

@@ -12,8 +12,11 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use ratatui::style::Color;
+
 use crate::cli::Args;
 use crate::tui::palette::RttThresholds;
+use crate::tui::theme::{ROLES, Theme, ThemeName, ThemeOverrides, color_name, parse_color};
 
 /// The header of the written file: what the layout is and how the file ranks against the other
 /// sources. Kept verbatim in `docs/config.example.toml`.
@@ -76,6 +79,56 @@ pub struct ProbeSection {
     pub asn: Option<bool>,
 }
 
+/// `[theme]`: a preset plus one colour string per role (see [`ROLES`] and [`parse_color`]).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThemeSection {
+    pub preset: Option<ThemeName>,
+    pub ok: Option<String>,
+    pub warn: Option<String>,
+    pub bad: Option<String>,
+    pub critical: Option<String>,
+    pub accent: Option<String>,
+    pub alert: Option<String>,
+    pub dim: Option<String>,
+    pub selected: Option<String>,
+}
+
+impl ThemeSection {
+    fn role(&self, name: &str) -> Option<&str> {
+        match name {
+            "ok" => self.ok.as_deref(),
+            "warn" => self.warn.as_deref(),
+            "bad" => self.bad.as_deref(),
+            "critical" => self.critical.as_deref(),
+            "accent" => self.accent.as_deref(),
+            "alert" => self.alert.as_deref(),
+            "dim" => self.dim.as_deref(),
+            "selected" => self.selected.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Every role parsed; the error names the role and the bad value.
+    fn overrides(&self) -> Result<ThemeOverrides, String> {
+        let parse = |name: &str| -> Result<Option<Color>, String> {
+            self.role(name)
+                .map(|s| parse_color(s).map_err(|e| format!("theme.{name}: {e}")))
+                .transpose()
+        };
+        Ok(ThemeOverrides {
+            ok: parse("ok")?,
+            warn: parse("warn")?,
+            bad: parse("bad")?,
+            critical: parse("critical")?,
+            accent: parse("accent")?,
+            alert: parse("alert")?,
+            dim: parse("dim")?,
+            selected: parse("selected")?,
+        })
+    }
+}
+
 /// Every key optional, so a partial file leaves the remaining defaults alone.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -84,6 +137,8 @@ pub struct FileConfig {
     pub display: DisplaySection,
     #[serde(default)]
     pub probe: ProbeSection,
+    #[serde(default)]
+    pub theme: ThemeSection,
 }
 
 /// A [`FileConfig`] that has passed [`FileConfig::validate`], carrying the values that needed
@@ -92,6 +147,7 @@ pub struct FileConfig {
 pub struct LoadedConfig {
     pub file: FileConfig,
     pub rtt_thresholds: Option<RttThresholds>,
+    pub theme_overrides: ThemeOverrides,
 }
 
 impl FileConfig {
@@ -133,9 +189,11 @@ impl FileConfig {
         {
             return Err("max unknown must be between 1 and 2147483647".to_string());
         }
+        let theme_overrides = self.theme.overrides()?;
         Ok(LoadedConfig {
             file: self,
             rtt_thresholds,
+            theme_overrides,
         })
     }
 }
@@ -238,6 +296,8 @@ pub struct EffectiveConfig {
     pub color: ColorChoice,
     pub sparkline: bool,
     pub detail_pane: bool,
+    pub theme: ThemeName,
+    pub theme_overrides: ThemeOverrides,
     pub interval: f64,
     pub gracetime: f64,
     pub max_ttl: i64,
@@ -258,6 +318,8 @@ impl Default for EffectiveConfig {
             color: ColorChoice::Auto,
             sparkline: true,
             detail_pane: true,
+            theme: ThemeName::Default,
+            theme_overrides: ThemeOverrides::default(),
             interval: 1.0,
             gracetime: 5.0,
             max_ttl: 30,
@@ -315,6 +377,21 @@ impl From<&EffectiveConfig> for FileConfig {
                 dns: Some(c.dns),
                 asn: Some(c.asn),
             },
+            theme: {
+                let o = &c.theme_overrides;
+                let s = |v: Option<Color>| v.map(color_name);
+                ThemeSection {
+                    preset: Some(c.theme),
+                    ok: s(o.ok),
+                    warn: s(o.warn),
+                    bad: s(o.bad),
+                    critical: s(o.critical),
+                    accent: s(o.accent),
+                    alert: s(o.alert),
+                    dim: s(o.dim),
+                    selected: s(o.selected),
+                }
+            },
         }
     }
 }
@@ -338,6 +415,8 @@ pub fn effective_from_args(args: &Args) -> EffectiveConfig {
         },
         sparkline: args.sparkline,
         detail_pane: args.detail_pane,
+        theme: args.theme_name(),
+        theme_overrides: args.theme_overrides,
         interval: args.interval,
         gracetime: args.gracetime,
         // The one field `Args::into_options` silently normalises rather than rejecting: `-m 999`
@@ -486,6 +565,33 @@ pub fn render(cfg: &EffectiveConfig) -> String {
     key(&mut s, "dns", cfg.dns.to_string(), cfg.dns == d.dns);
     s.push_str("# Look up origin AS numbers; true is -z.\n");
     key(&mut s, "asn", cfg.asn.to_string(), cfg.asn == d.asn);
+    s.push_str("\n[theme]\n");
+    s.push_str(
+        "# The colour preset (--theme): \"default\" is the terminal's own ANSI palette; \"dracula\",\n\
+         # \"nord\", \"solarized\" and \"gruvbox\" are RGB: reduced to 256 colours, or on a 16-colour terminal\n\
+         # replaced by the terminal's palette role by role.\n",
+    );
+    key(
+        &mut s,
+        "preset",
+        toml_string(cfg.theme.as_str()),
+        cfg.theme == d.theme,
+    );
+    s.push_str(
+        "# One colour per role, replacing the preset's: a name (\"green\", \"light red\", \"dark gray\"),\n\
+         # a 256-colour index (\"208\"), \"#rrggbb\", or \"reset\" for no colour. Shown: the preset's own.\n\
+         #   ok / warn / bad / critical  the loss and RTT ramps, critical bold at the top\n\
+         #   accent                      headers (bold), the prompt, the RTT chart\n\
+         #   alert                       the status line and [PAUSED] (bold)\n\
+         #   dim                         unknown hops, secondary rows, axes, footer hints\n\
+         #   selected                    the selected row's background (\"reset\" reverses it)\n",
+    );
+    let preset = Theme::preset(cfg.theme);
+    for (role, set) in cfg.theme_overrides.entries() {
+        let shown = set.unwrap_or_else(|| preset.role(role).expect("every ROLES name resolves"));
+        key(&mut s, role, toml_string(&color_name(shown)), set.is_none());
+    }
+    debug_assert_eq!(cfg.theme_overrides.entries().map(|(r, _)| r), ROLES);
     s
 }
 
@@ -595,6 +701,12 @@ pub fn apply(args: &mut Args, cfg: &LoadedConfig) {
     {
         args.aslookup = z;
     }
+    if unset("theme")
+        && let Some(p) = file.theme.preset
+    {
+        args.theme_preset = Some(p);
+    }
+    args.theme_overrides = cfg.theme_overrides;
 }
 
 #[cfg(test)]
@@ -679,7 +791,7 @@ mod tests {
     #[test]
     fn every_key_reaches_options() {
         let o = opts(
-            r#"
+            r##"
 [display]
 rtt_thresholds_ms = [5, 10, 20, 40]
 fields = "LSNB"
@@ -695,7 +807,17 @@ max_unknown = 3
 timeout = 7
 dns = false
 asn = true
-"#,
+[theme]
+preset = "nord"
+ok = "light green"
+warn = "#ffb86c"
+bad = "208"
+critical = "light red"
+accent = "cyan"
+alert = "magenta"
+dim = "dark gray"
+selected = "236"
+"##,
             None,
             &["h"],
         );
@@ -709,6 +831,43 @@ asn = true
         assert_eq!(o.config.probe_timeout, std::time::Duration::from_secs(7));
         assert!(!o.config.dns);
         assert_eq!(o.config.ipinfo_fields, vec![0]);
+        let t = o.theme;
+        assert_eq!(t.ok, Color::LightGreen);
+        assert_eq!(t.warn, Color::Rgb(0xff, 0xb8, 0x6c));
+        assert_eq!(t.bad, Color::Indexed(208));
+        assert_eq!(t.critical, Color::LightRed);
+        assert_eq!(t.accent, Color::Cyan);
+        assert_eq!(t.alert, Color::Magenta);
+        assert_eq!(t.dim, Color::DarkGray);
+        assert_eq!(t.selected, Color::Indexed(236));
+    }
+
+    #[test]
+    fn theme_flag_beats_the_file_preset_and_the_overrides_stay_on_top() {
+        use crate::tui::theme::Theme;
+        let nord = "[theme]\npreset = \"nord\"\n";
+        assert_eq!(opts("", None, &["h"]).theme, Theme::default());
+        assert_eq!(
+            opts(nord, None, &["h"]).theme,
+            Theme::preset(ThemeName::Nord)
+        );
+        assert_eq!(
+            opts(nord, None, &["--theme", "dracula", "h"]).theme,
+            Theme::preset(ThemeName::Dracula)
+        );
+        assert_eq!(
+            opts(nord, Some("--theme gruvbox"), &["h"]).theme,
+            Theme::preset(ThemeName::Gruvbox)
+        );
+        // a role override applies to whichever preset wins, flag or file
+        let over = "[theme]\npreset = \"nord\"\ncritical = \"#ff0000\"\n";
+        let t = opts(over, None, &["--theme", "solarized", "h"]).theme;
+        assert_eq!(t.critical, Color::Rgb(0xff, 0, 0));
+        assert_eq!(t.ok, Theme::preset(ThemeName::Solarized).ok);
+        // overrides alone recolour the default palette
+        let t = opts("[theme]\nselected = \"blue\"\n", None, &["h"]).theme;
+        assert_eq!(t.selected, Color::Blue);
+        assert_eq!(t.ok, Color::Green);
     }
 
     #[test]
@@ -826,7 +985,7 @@ asn = true
     #[test]
     fn a_full_file_parses_every_key() {
         let cfg = parse(
-            r#"
+            r##"
 [display]
 rtt_thresholds_ms = [5, 10, 20, 40]
 fields = "LSNB"
@@ -842,7 +1001,17 @@ max_unknown = 3
 timeout = 7
 dns = false
 asn = true
-"#,
+[theme]
+preset = "nord"
+ok = "light green"
+warn = "#ffb86c"
+bad = "208"
+critical = "light red"
+accent = "cyan"
+alert = "magenta"
+dim = "dark gray"
+selected = "236"
+"##,
         )
         .unwrap();
         assert_eq!(cfg.rtt_thresholds.unwrap().to_millis(), [5, 10, 20, 40]);
@@ -860,6 +1029,10 @@ asn = true
         assert_eq!(pr.timeout, Some(7));
         assert_eq!(pr.dns, Some(false));
         assert_eq!(pr.asn, Some(true));
+        assert_eq!(cfg.file.theme.preset, Some(ThemeName::Nord));
+        assert_eq!(cfg.file.theme.bad.as_deref(), Some("208"));
+        assert_eq!(cfg.theme_overrides.bad, Some(Color::Indexed(208)));
+        assert_eq!(cfg.theme_overrides.warn, Some(Color::Rgb(0xff, 0xb8, 0x6c)));
     }
 
     #[test]
@@ -920,6 +1093,23 @@ asn = true
                 .unwrap_err()
                 .contains("unknown variant")
         );
+        assert!(
+            parse("[theme]\npreset = \"tango\"\n")
+                .unwrap_err()
+                .contains("unknown variant")
+        );
+        assert!(
+            parse("[theme]\nheader = \"blue\"\n")
+                .unwrap_err()
+                .contains("unknown field")
+        );
+        let err = parse("[theme]\ncritical = \"#ff000\"\n").unwrap_err();
+        assert!(
+            err.starts_with("theme.critical: invalid colour \"#ff000\""),
+            "{err}"
+        );
+        assert!(parse("[theme]\nok = \"256\"\n").is_err());
+        assert!(parse("[theme]\nok = 2\n").is_err(), "colours are strings");
     }
 
     fn args(argv: &[&str]) -> Args {
@@ -996,6 +1186,17 @@ asn = true
             timeout: 7,
             dns: false,
             asn: true,
+            theme: ThemeName::Dracula,
+            theme_overrides: ThemeOverrides {
+                ok: Some(Color::LightGreen),
+                warn: Some(Color::Rgb(0xff, 0xb8, 0x6c)),
+                bad: Some(Color::Indexed(208)),
+                critical: Some(Color::LightRed),
+                accent: Some(Color::Cyan),
+                alert: Some(Color::Magenta),
+                dim: Some(Color::DarkGray),
+                selected: Some(Color::Reset),
+            },
         };
         let text = render(&cfg);
         assert!(
@@ -1042,6 +1243,10 @@ asn = true
         assert_eq!(cfg.file.display.fields.as_deref(), Some("LS NABWV"));
         assert_eq!(cfg.file.display.color, Some(ColorChoice::Auto));
         assert_eq!(cfg.file.probe.interval, Some(1.0));
+        assert_eq!(cfg.file.theme.preset, Some(ThemeName::Default));
+        // the commented role lines spell out the default preset, so uncommented they change nothing
+        assert_eq!(cfg.file.theme.dim.as_deref(), Some("reset"));
+        assert_eq!(cfg.theme_overrides.ok, Some(Color::Green));
         let o = with_file(&all, |path| {
             let mut a = Args::parse_argv(vec!["mtr".to_string(), "h".to_string()]).unwrap();
             apply(&mut a, &load(path).unwrap());
@@ -1054,6 +1259,19 @@ asn = true
             (o.ascii, o.color, o.sparkline, o.detail_pane),
             (d.ascii, d.color, d.sparkline, d.detail_pane)
         );
+        assert_eq!(o.theme, d.theme);
+    }
+
+    #[test]
+    fn render_shows_the_chosen_presets_own_colours_as_the_role_defaults() {
+        let cfg = effective_from_args(&args(&["--theme", "nord", "h"]));
+        let text = render(&cfg);
+        assert!(text.contains("\npreset = \"nord\"\n"), "{text}");
+        assert!(text.contains("\n#ok = \"#a3be8c\"\n"), "{text}");
+        assert!(text.contains("\n#selected = \"#434c5e\"\n"), "{text}");
+        let back = parse(&text).unwrap();
+        assert_eq!(back.file.theme.preset, Some(ThemeName::Nord));
+        assert_eq!(back.theme_overrides, ThemeOverrides::default());
     }
 
     #[test]

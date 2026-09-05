@@ -69,6 +69,7 @@ grant (`setcap`, or the BSD `chmod u+s` without root) prints the command and exi
 
     mtr-rs example.org                      # interactive TUI (q quits, ? for keys)
     mtr-rs --ascii example.org              # plain glyphs (NO_COLOR honoured too)
+    mtr-rs --theme dracula example.org      # or nord, solarized, gruvbox; default is the terminal's palette
     mtr-rs --report-on-exit example.org     # -r report when the TUI closes
     mtr-rs -r -c 5 example.org              # classic report
     mtr-rs -rwz -c 5 example.org            # wide report with AS numbers
@@ -131,7 +132,17 @@ or `--config PATH`) as defaults. Precedence, lowest to highest:
     built-in defaults  <  config file  <  $MTR_OPTIONS  <  the command line
 
 An unknown key is an error; an unreadable or malformed file is fatal. For one run,
-`--rtt-thresholds 30,100,200,500` and `--color auto|always|never` override the file.
+`--rtt-thresholds 30,100,200,500`, `--color auto|always|never` and `--theme NAME` override the file.
+
+The TUI's colours come from a theme. The default is the terminal's own ANSI palette, so the
+terminal theme decides the exact green, yellow and red; `--theme dracula|nord|solarized|gruvbox`
+picks an RGB preset instead, reduced to 256 colours when that is what the terminal offers; a
+16-colour terminal cannot show an RGB palette and keeps its own colours for those roles.
+The `[theme]` section of the config file names the preset and recolours any role on top of it:
+`ok`, `warn`, `bad` and `critical` (the loss and RTT ramps), `accent` (headers, prompt, chart),
+`alert` (the status line), `dim` and `selected`. A colour is a name (`green`, `light red`,
+`dark gray`), a 256-colour index (`208`), `#rrggbb`, or `reset` for none. `docs/config.example.toml`
+lists every role with the default preset's colour.
 
 ## Helper and privileges
 

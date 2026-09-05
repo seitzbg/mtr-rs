@@ -1,10 +1,13 @@
-//! Colour depth ladder and the semantic styles of the TUI (spec §8). Every style uses the
-//! terminal's own named ANSI colours, so the theme decides the exact green/yellow/red and the
-//! display looks the same locally and over ssh (which drops `COLORTERM`); the depth only decides
-//! colour versus mono.
+//! Colour depth ladder and the semantic styles of the TUI (spec §8). The colours come from a
+//! [`Theme`]; the default one is the terminal's own named ANSI colours, so out of the box the
+//! terminal decides the exact green/yellow/red and the display looks the same locally and over
+//! ssh (which drops `COLORTERM`). The depth decides colour versus mono, and how far an RGB theme
+//! is reduced (see [`Theme::for_depth`]).
 //! Ported from ui/curses.c (mtr 0.96, commit 7b01773). GPL-2.0-only.
 
 use ratatui::style::{Color, Modifier, Style};
+
+use super::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Depth {
@@ -66,6 +69,8 @@ impl RttThresholds {
 pub struct Palette {
     pub depth: Depth,
     pub rtt_thresholds: RttThresholds,
+    /// Already reduced to `depth` (see [`Palette::with_theme`]).
+    pub theme: Theme,
 }
 
 impl Palette {
@@ -73,12 +78,19 @@ impl Palette {
         Palette {
             depth,
             rtt_thresholds: RttThresholds::default(),
+            theme: Theme::default(),
         }
     }
 
     /// Builder used by `run_target`; keeps `new`/`detect` unchanged for every other caller.
     pub fn with_rtt_thresholds(mut self, t: RttThresholds) -> Self {
         self.rtt_thresholds = t;
+        self
+    }
+
+    /// The theme, reduced to what this palette's depth can show.
+    pub fn with_theme(mut self, t: Theme) -> Self {
+        self.theme = t.for_depth(self.depth);
         self
     }
 
@@ -105,37 +117,25 @@ impl Palette {
         }
     }
 
-    fn fg(&self, ansi: Color) -> Style {
+    /// The single place a colour becomes a style: nothing in Mono, and nothing for `Reset` (the
+    /// theme's "no colour").
+    fn fg(&self, color: Color) -> Style {
         let s = Style::new();
-        match self.depth {
-            Depth::Mono => s,
-            Depth::Ansi16 | Depth::Ansi256 | Depth::TrueColor => s.fg(ansi),
+        match (self.depth, color) {
+            (Depth::Mono, _) | (_, Color::Reset) => s,
+            (Depth::Ansi16 | Depth::Ansi256 | Depth::TrueColor, c) => s.fg(c),
         }
     }
 
-    fn green(&self) -> Style {
-        self.fg(Color::Green)
-    }
-    fn yellow(&self) -> Style {
-        self.fg(Color::Yellow)
-    }
-    fn magenta(&self) -> Style {
-        self.fg(Color::Magenta)
-    }
-    fn red(&self) -> Style {
-        self.fg(Color::Red)
-    }
-    fn blue(&self) -> Style {
-        self.fg(Color::Blue)
-    }
-
     /// Loss% cell colour; `permille` is `Hop::loss()` (per-mille ×100, i.e. 100 000 = 100 %).
+    /// The ramp skips the theme's `bad` stop, as C mtr's does.
     pub fn loss(&self, permille: i32) -> Style {
+        let t = &self.theme;
         match permille {
-            p if p <= 0 => self.green(),
-            p if p < 10_000 => self.yellow(),
-            p if p >= 100_000 => self.red().add_modifier(Modifier::BOLD),
-            _ => self.red(),
+            p if p <= 0 => self.fg(t.ok),
+            p if p < 10_000 => self.fg(t.warn),
+            p if p >= 100_000 => self.fg(t.critical).add_modifier(Modifier::BOLD),
+            _ => self.fg(t.critical),
         }
     }
 
@@ -144,37 +144,43 @@ impl Palette {
     /// `display.rtt_thresholds_ms` / `--rtt-thresholds` replace the four bounds.
     pub fn rtt(&self, us: u32) -> Style {
         let t = self.rtt_thresholds.us;
+        let c = &self.theme;
         match us {
-            u if u < t[0] => self.green(),
-            u if u < t[1] => self.yellow(),
-            u if u < t[2] => self.magenta(),
-            u if u < t[3] => self.red(),
-            _ => self.red().add_modifier(Modifier::BOLD),
+            u if u < t[0] => self.fg(c.ok),
+            u if u < t[1] => self.fg(c.warn),
+            u if u < t[2] => self.fg(c.bad),
+            u if u < t[3] => self.fg(c.critical),
+            _ => self.fg(c.critical).add_modifier(Modifier::BOLD),
         }
     }
 
     pub fn dim(&self) -> Style {
-        Style::new().add_modifier(Modifier::DIM)
+        self.fg(self.theme.dim).add_modifier(Modifier::DIM)
     }
     pub fn bold(&self) -> Style {
         Style::new().add_modifier(Modifier::BOLD)
     }
+    /// A background from the theme, or the reversed row when it has none (and always in Mono,
+    /// where a background would be the only colour on screen).
     pub fn selected(&self) -> Style {
-        Style::new().add_modifier(Modifier::REVERSED)
+        match (self.depth, self.theme.selected) {
+            (Depth::Mono, _) | (_, Color::Reset) => Style::new().add_modifier(Modifier::REVERSED),
+            (_, bg) => Style::new().bg(bg),
+        }
     }
     pub fn header(&self) -> Style {
-        self.blue().add_modifier(Modifier::BOLD)
+        self.fg(self.theme.accent).add_modifier(Modifier::BOLD)
     }
     pub fn accent(&self) -> Style {
-        self.blue()
+        self.fg(self.theme.accent)
     }
     pub fn alert(&self) -> Style {
-        self.yellow().add_modifier(Modifier::BOLD)
+        self.fg(self.theme.alert).add_modifier(Modifier::BOLD)
     }
-    /// A single lost probe in the sparkline column on a hop that does answer: plain red, not the
+    /// A single lost probe in the sparkline column on a hop that does answer: plain, not the
     /// bold 100 %-loss style (that would visually equate one drop with total loss).
     pub fn lost_sample(&self) -> Style {
-        self.red()
+        self.fg(self.theme.critical)
     }
 }
 
@@ -262,6 +268,52 @@ mod tests {
         assert_eq!(
             Palette::new(Depth::Ansi16).rtt(1_000).fg,
             Some(Color::Green)
+        );
+    }
+
+    #[test]
+    fn a_theme_recolours_every_role_and_is_reduced_to_the_depth() {
+        use crate::tui::theme::{Theme, ThemeName, ThemeOverrides};
+        let dracula = Theme::preset(ThemeName::Dracula);
+        let p = Palette::new(Depth::TrueColor).with_theme(dracula);
+        assert_eq!(p.loss(0).fg, Some(dracula.ok));
+        assert_eq!(p.rtt(150_000).fg, Some(dracula.bad));
+        assert_eq!(p.lost_sample().fg, Some(dracula.critical));
+        assert_eq!(p.header().fg, Some(dracula.accent));
+        assert!(p.header().add_modifier.contains(Modifier::BOLD));
+        assert_eq!(p.alert().fg, Some(dracula.alert));
+        assert_eq!(p.dim().fg, Some(dracula.dim));
+        assert!(p.dim().add_modifier.contains(Modifier::DIM));
+        // a themed selection is a background, not a reversed row
+        assert_eq!(p.selected().bg, Some(dracula.selected));
+        assert!(!p.selected().add_modifier.contains(Modifier::REVERSED));
+        // on 16 colours an RGB preset gives way to the terminal's palette
+        let p16 = Palette::new(Depth::Ansi16).with_theme(dracula);
+        assert_eq!(p16.loss(100_000).fg, Some(Color::Red));
+        assert!(p16.selected().add_modifier.contains(Modifier::REVERSED));
+        // on 256 colours it is reduced to the cube
+        let p256 = Palette::new(Depth::Ansi256).with_theme(dracula);
+        assert!(matches!(p256.loss(100_000).fg, Some(Color::Indexed(_))));
+        assert!(matches!(p256.selected().bg, Some(Color::Indexed(_))));
+        // mono keeps only the attributes, whatever the theme says
+        let mono = Palette::new(Depth::Mono).with_theme(dracula);
+        assert_eq!(mono.loss(0).fg, None);
+        assert_eq!(mono.selected().bg, None);
+        assert!(mono.selected().add_modifier.contains(Modifier::REVERSED));
+        // `reset` in a role means no colour, and the default theme's dim/selected are exactly that
+        let d = Palette::new(Depth::TrueColor);
+        assert_eq!(d.dim().fg, None);
+        assert!(d.selected().add_modifier.contains(Modifier::REVERSED));
+        let o = ThemeOverrides {
+            ok: Some(Color::Reset),
+            ..ThemeOverrides::default()
+        };
+        assert_eq!(
+            Palette::new(Depth::Ansi16)
+                .with_theme(Theme::default().with_overrides(&o))
+                .loss(0)
+                .fg,
+            None
         );
     }
 
