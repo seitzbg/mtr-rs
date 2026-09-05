@@ -3,8 +3,8 @@
 A Rust port of [mtr](https://github.com/traviscross/mtr) (My TraceRoute). Like upstream it is two
 binaries: the unprivileged `mtr-rs` client and the privileged `mtr-rs-packet` helper. Both speak
 the C mtr 0.96 line protocol, so each half also works with its C counterpart. The TUI is the
-default; `-r`, `-w`, `-j` and `-C` give the classic reports. Linux, FreeBSD and macOS, x86_64
-and aarch64. GPL-2.0-only.
+default; `-r`, `-w`, `-j` and `-C` give the classic reports. Linux and macOS on x86_64 and
+aarch64, FreeBSD on x86_64. GPL-2.0-only.
 
 ## Screenshots
 
@@ -25,7 +25,7 @@ and aarch64. GPL-2.0-only.
     sudo dpkg -i mtr-rs_0.3.0-1_amd64.deb
 
     # FreeBSD package: same files, mtr-rs-packet setuid root
-    sudo pkg add mtr-rs-0.3.0-aarch64-freebsd.pkg
+    sudo pkg add mtr-rs-0.3.0-x86_64-freebsd.pkg
 
     # from a checkout, with man pages and bash/zsh/fish completions
     cargo build --release --workspace && cargo xtask dist
