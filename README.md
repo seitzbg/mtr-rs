@@ -14,17 +14,33 @@ aarch64, FreeBSD on x86_64. GPL-2.0-only.
 
 ## Install
 
-    # release tarball, unpacked as mtr-rs-<version>-<arch>-<os>/
+Every release ships `mtr-rs-<version>-<arch>-<os>.tar.gz` tarballs (Linux, macOS, FreeBSD), `.deb`s
+and a FreeBSD `.pkg`. The one platform-specific step is giving `mtr-rs-packet` the right to open raw
+sockets: a capability on Linux, setuid root on macOS and FreeBSD (it drops back to you once its
+sockets are open).
+
+    # macOS: Homebrew (Apple silicon and Intel; also works with Linuxbrew)
+    brew install seitzbg/mtr-rs/mtr-rs
+    sudo chown root:wheel "$(brew --prefix)/opt/mtr-rs/bin/mtr-rs-packet"   # repeat after upgrades
+    sudo chmod u+s "$(brew --prefix)/opt/mtr-rs/bin/mtr-rs-packet"
+
+    # macOS: tarball (unsigned; clear the quarantine flag Gatekeeper adds to downloads)
+    tar xzf mtr-rs-0.3.0-aarch64-macos.tar.gz && cd mtr-rs-0.3.0-aarch64-macos
+    xattr -d com.apple.quarantine bin/* 2>/dev/null
+    sudo install -m 755 bin/mtr-rs bin/mtr-rs-packet /usr/local/bin/
+    sudo install -m 644 man/*.8 /usr/local/share/man/man8/
+    sudo chown root:wheel /usr/local/bin/mtr-rs-packet && sudo chmod u+s /usr/local/bin/mtr-rs-packet
+
+    # Linux: tarball
     tar xzf mtr-rs-0.3.0-x86_64-linux.tar.gz && cd mtr-rs-0.3.0-x86_64-linux
     sudo install -m 755 bin/mtr-rs bin/mtr-rs-packet /usr/local/bin/
     sudo install -m 644 man/*.8 /usr/local/share/man/man8/
-    sudo setcap cap_net_raw+ep /usr/local/bin/mtr-rs-packet              # Linux
-    sudo chown root:wheel /usr/local/bin/mtr-rs-packet && sudo chmod 4755 /usr/local/bin/mtr-rs-packet  # FreeBSD, macOS
+    sudo setcap cap_net_raw+ep /usr/local/bin/mtr-rs-packet
 
-    # Debian package: same files, setcap from its postinst
+    # Linux: Debian package, setcap from its postinst
     sudo dpkg -i mtr-rs_0.3.0-1_amd64.deb
 
-    # FreeBSD package: same files, mtr-rs-packet setuid root
+    # FreeBSD: package, mtr-rs-packet setuid root (or the tarball, as for macOS)
     sudo pkg add mtr-rs-0.3.0-x86_64-freebsd.pkg
 
     # from a checkout, with man pages and bash/zsh/fish completions
@@ -136,6 +152,7 @@ Deliberate differences, each with a code comment citing the C source:
     cargo xtask man          # target/dist/man/
     cargo xtask completions  # target/dist/completions/ (bash, zsh, fish)
     cargo xtask dist         # both, plus a release build, under target/dist/
+    scripts/homebrew-formula.sh 0.3.0   # the Homebrew formula for a published release (seitzbg/homebrew-mtr-rs)
 
 The upstream Python suites run unmodified against our helper. `--compare` fails only on failures
 that are ours alone; `param.py` and `probe.py` want `cap_net_raw` on the C repo's listener too, and
