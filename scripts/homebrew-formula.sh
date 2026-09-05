@@ -75,7 +75,7 @@ class MtrRs < Formula
 
   test do
     assert_match "mtr-rs #{version}", shell_output("#{bin}/mtr-rs --version")
-    assert_match "mtr-rs-packet", shell_output("#{bin}/mtr-rs --help")
+    assert_match "Usage: mtr-rs", shell_output("#{bin}/mtr-rs --help")
   end
 end
 RUBY
