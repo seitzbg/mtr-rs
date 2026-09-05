@@ -147,6 +147,9 @@ jobs:
           release: "14.3"
           mem: 8192
           cpu: 4
+          # Nothing here needs to come back to the runner, and the copy-back rsync of a full
+          # target/ has failed spuriously (exit 12) after every test had passed.
+          copyback: false
           prepare: |
             pkg install -y rust bash python3
           run: |
