@@ -6,7 +6,19 @@ All notable changes to mtr-rs are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- The release workflow regenerates the Homebrew formula from the published tarballs and pushes it
+  to [seitzbg/homebrew-mtr-rs](https://github.com/seitzbg/homebrew-mtr-rs); without the
+  `HOMEBREW_TAP_TOKEN` secret it warns and skips. `scripts/homebrew-formula.sh` does the same by
+  hand.
+- README: per-platform install steps (Homebrew first for macOS) and a "Checking the install"
+  walkthrough covering every probe mode with its expected output.
+
+### Changed
+- FreeBSD release binaries are x86_64 only; aarch64 builds and tests from source but the emulated
+  release build took over an hour per tag.
+- The FreeBSD CI job no longer copies the workspace back out of the VM (a spurious `rsync`
+  failure after every test had passed).
 
 ## [0.3.0] - 2026-09-05
 
