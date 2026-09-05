@@ -32,6 +32,9 @@ pub struct Family {
     pub sockets: Sockets,
 }
 
+/// `SO_SNDBUF` for the raw send sockets: comfortably above `PACKET_BUFFER_SIZE` plus headers.
+const SEND_BUFFER_SIZE: usize = 65536;
+
 fn domain(version: u8) -> Domain {
     if version == 6 {
         Domain::IPV6
@@ -65,6 +68,12 @@ impl Family {
         let raw = (|| -> std::io::Result<Sockets> {
             let icmp_send = Socket::new(domain(version), Type::RAW, Some(icmp_protocol(version)))?;
             let udp_send = Socket::new(domain(version), Type::RAW, Some(Protocol::UDP))?;
+            // A probe may be PACKET_BUFFER_SIZE (9000) bytes. Darwin's raw-socket send buffer
+            // defaults to 8192 (`rip_sendspace`), which turns such a `sendto` into `EMSGSIZE`;
+            // FreeBSD's 9216 barely fits and Linux's is far larger. Ask for room everywhere.
+            for sock in [&icmp_send, &udp_send] {
+                sock.set_send_buffer_size(SEND_BUFFER_SIZE)?;
+            }
             let recv = Socket::new(domain(version), Type::RAW, Some(icmp_protocol(version)))?;
             Ok(Sockets::Raw {
                 icmp_send,

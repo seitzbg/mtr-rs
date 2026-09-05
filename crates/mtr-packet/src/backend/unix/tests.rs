@@ -301,6 +301,15 @@ fn udp_to_a_closed_loopback_port_is_a_reply_in_all_port_modes() {
         if params.ip_version == 6 && !b.ip_version_supported(6) {
             continue; // no IPv6 probe sockets here
         }
+        // With both ports fixed the sequence travels in the UDP checksum field. Darwin's
+        // `udp_input()` stores its verification result (0 for a good checksum) back into
+        // `uh_sum` before `icmp_error()` quotes the datagram, so a port-unreachable *from a
+        // macOS host* carries checksum 0 and cannot be matched — here the host is loopback. C's
+        // matcher has the identical blind spot (deconstruct_unix.c:63-121); replies from
+        // routers and non-Darwin hosts quote the field untouched.
+        if cfg!(target_os = "macos") && params.dest_port != 0 && params.local_port != 0 {
+            continue;
+        }
         let mut t = ProbeTable::new();
         let i = t.alloc(tok, Instant::now(), 3).unwrap();
         b.send_probe(&mut t, i, &params).unwrap();

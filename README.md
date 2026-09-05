@@ -96,6 +96,9 @@ raw sockets are open:
 `-M`/`--mark` (`SO_MARK`) is Linux only and the client refuses it elsewhere. The helper's
 `local-device` is `SO_BINDTODEVICE` on Linux and `IP_BOUND_IF` on macOS, and unsupported on FreeBSD;
 `-I` works everywhere because the client resolves the interface to a source address itself.
+One macOS blind spot, shared with C mtr: a UDP probe with both `-P` and `-L` fixed carries its
+sequence in the UDP checksum field, and Darwin zeroes that field in the port-unreachable it
+quotes, so the final hop is unmatched when the destination is itself a Mac.
 
 The helper opens its sockets, then drops setgid, setuid and its capabilities before reading stdin.
 One exception: `CAP_NET_ADMIN` is kept when the helper started with it, because `SO_MARK` is set
