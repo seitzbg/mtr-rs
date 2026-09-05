@@ -20,7 +20,7 @@ sockets: a capability on Linux, setuid root on macOS and FreeBSD (it drops back 
 sockets are open).
 
     # macOS: Homebrew (Apple silicon and Intel; also works with Linuxbrew)
-    brew install seitzbg/mtr-rs/mtr-rs
+    brew install seitzbg/mtr-rs/mtr-rs                 # Homebrew 6 may first ask for: brew trust seitzbg/mtr-rs
     sudo chown root:wheel "$(brew --prefix)/opt/mtr-rs/bin/mtr-rs-packet"   # repeat after upgrades
     sudo chmod u+s "$(brew --prefix)/opt/mtr-rs/bin/mtr-rs-packet"
 
@@ -72,6 +72,43 @@ grant (`setcap`, or the BSD `chmod u+s` without root) prints the command and exi
 Keys follow C mtr (`p`/space, `r`, `n`, `z`, `e`, `s`, `b`, `i`, `f`, `m`, `o`, `Q`, `u`/`t`, `?`);
 `↑`/`↓`/`j`/`k` select a hop, `Enter` opens the detail pane, `Tab` cycles its RTT, Addresses and Log
 tabs, `d` toggles the Recent sparkline.
+
+## Checking the install
+
+Run these once after installing, as your normal user (not root). Each one should print a hop list
+ending in the target; a run that only ever prints `???` for every hop, or exits with a privilege
+hint, means the helper cannot open its sockets, and the hint names the fix for your OS.
+
+    mtr-rs --version                         # client version
+    mtr-rs -r -c 3 127.0.0.1                 # ICMP to loopback: one hop, ~0 ms, no privileges beyond the helper's
+    mtr-rs -r -c 3 1.1.1.1                   # ICMP over the real path: several hops, the last one 1.1.1.1
+    mtr-rs -6 -r -c 3 2606:4700:4700::1111   # the same over IPv6 (needs IPv6 connectivity)
+    mtr-rs -u -r -c 3 1.1.1.1                # UDP probes: same hops, final hop answers with port-unreachable
+    mtr-rs -T -P 443 -r -c 3 1.1.1.1         # TCP SYN probes to a port that is open on the target
+    mtr-rs -T -P 9 -r -c 3 1.1.1.1           # TCP to a closed port: still reaches the last hop (RST counts as a reply)
+    mtr-rs -I en0 -r -c 3 1.1.1.1            # source interface (eth0 on Linux); fails cleanly for a bad name
+    mtr-rs -e -r -c 3 1.1.1.1                # MPLS labels, shown only where a router attaches them
+    mtr-rs -rwz -c 3 1.1.1.1                 # wide report with AS numbers (DNS TXT lookups)
+    mtr-rs -j -c 3 1.1.1.1 | jq .            # JSON, same schema as C mtr
+    mtr-rs 1.1.1.1                           # the TUI; q quits, ? lists the keys
+
+What differs by platform:
+
+- Linux without `cap_net_raw` on the helper: ICMP and UDP still work through unprivileged sockets,
+  TCP and SCTP see the final hop only, MPLS labels are not decoded. With the capability all modes
+  work. `-M`/`--mark` needs `cap_net_admin` as well (see below).
+- macOS and FreeBSD: the helper must be setuid root, or everything above has to run under `sudo`.
+  `-M` is refused, and SCTP is reported as unsupported (macOS has no SCTP; FreeBSD needs the
+  `sctp` kernel module). On macOS a UDP run with both `-P` and `-L` fixed misses the final hop when
+  the destination is itself a Mac (see Differences from C mtr).
+- Intermediate hops that show `???` on every run are routers that rate-limit or drop ICMP
+  time-exceeded; C mtr shows the same. Compare with `mtr` or `traceroute` if in doubt.
+
+When something looks wrong, capture the helper conversation and open an issue with it:
+
+    MTR_RS_LOG=/tmp/mtr-rs.log mtr-rs -r -c 3 1.1.1.1   # the log holds every command and reply
+    printf '1 check-support feature ip-4\n2 check-support feature mark\n' | mtr-rs-packet
+                                                        # talk to the helper directly: "support ok"/"support no"
 
 ## Configuration
 

@@ -56,8 +56,11 @@ class MtrRs < Formula
   end
 
   def caveats
+    # Accumulate rather than return from the last on_* block: on macOS that block is the
+    # on_linux one, whose value is nil, and the caveat would silently vanish.
+    text = +""
     on_macos do
-      <<~EOS
+      text << <<~EOS
         mtr-rs-packet opens raw sockets, which need root. Either run \`sudo mtr-rs\`, or let
         the helper start as root on its own (it drops back to you once its sockets are open);
         Homebrew cannot do that step, so repeat it after every install or upgrade:
@@ -65,12 +68,13 @@ class MtrRs < Formula
       EOS
     end
     on_linux do
-      <<~EOS
+      text << <<~EOS
         mtr-rs-packet needs cap_net_raw for raw sockets; grant it once per install or upgrade:
           sudo setcap cap_net_raw+ep #{opt_bin}/mtr-rs-packet
         Without it the helper falls back to unprivileged ICMP sockets (see the README).
       EOS
     end
+    text
   end
 
   test do
