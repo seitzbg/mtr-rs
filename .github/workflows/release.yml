@@ -125,16 +125,18 @@ jobs:
           name: mtr-rs-macos-${{ matrix.arch }}
           path: out/*
 
-  # FreeBSD tarballs and pkg(8) packages, built inside a FreeBSD VM on the Ubuntu runner
-  # (see ci.yml for why pkg's rust and not rustup). The aarch64 VM is emulated, so that
-  # build takes a while; it is a tag-time cost only.
+  # FreeBSD tarball and pkg(8) package, built inside a FreeBSD VM on the Ubuntu runner (see
+  # ci.yml for why pkg's rust and not rustup). x86_64 only: GitHub has no runner that can
+  # virtualise an aarch64 FreeBSD guest, and an emulated one took over an hour per release.
+  # FreeBSD aarch64 builds from source (`scripts/build-freebsd-pkg.sh` works there) but ships
+  # no binary.
   build-freebsd:
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        arch: [x86_64, aarch64]
+        arch: [x86_64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
