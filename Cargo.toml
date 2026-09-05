@@ -4,7 +4,7 @@ members = ["crates/mtr-proto", "crates/mtr-core", "crates/mtr", "crates/mtr-pack
 exclude = ["crates/mtr-proto/fuzz", "crates/mtr-packet/fuzz"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 license = "GPL-2.0-only"
 rust-version = "1.85"
@@ -12,8 +12,8 @@ rust-version = "1.85"
 [workspace.dependencies]
 # The `version` is redundant for a path build but keeps these from reading as wildcard
 # dependencies (see deny.toml `[bans] wildcards`), and crates.io would require it anyway.
-mtr-proto = { path = "crates/mtr-proto", version = "0.2.1" }
-mtr-core = { path = "crates/mtr-core", version = "0.2.1" }
+mtr-proto = { path = "crates/mtr-proto", version = "0.3.0" }
+mtr-core = { path = "crates/mtr-core", version = "0.3.0" }
 thiserror = "2"
 anyhow = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "signal", "net"] }

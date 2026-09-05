@@ -15,17 +15,17 @@ and aarch64. GPL-2.0-only.
 ## Install
 
     # release tarball, unpacked as mtr-rs-<version>-<arch>-<os>/
-    tar xzf mtr-rs-0.2.1-x86_64-linux.tar.gz && cd mtr-rs-0.2.1-x86_64-linux
+    tar xzf mtr-rs-0.3.0-x86_64-linux.tar.gz && cd mtr-rs-0.3.0-x86_64-linux
     sudo install -m 755 bin/mtr-rs bin/mtr-rs-packet /usr/local/bin/
     sudo install -m 644 man/*.8 /usr/local/share/man/man8/
     sudo setcap cap_net_raw+ep /usr/local/bin/mtr-rs-packet              # Linux
     sudo chown root:wheel /usr/local/bin/mtr-rs-packet && sudo chmod 4755 /usr/local/bin/mtr-rs-packet  # FreeBSD, macOS
 
     # Debian package: same files, setcap from its postinst
-    sudo dpkg -i mtr-rs_0.2.1-1_amd64.deb
+    sudo dpkg -i mtr-rs_0.3.0-1_amd64.deb
 
     # FreeBSD package: same files, mtr-rs-packet setuid root
-    sudo pkg add mtr-rs-0.2.1-aarch64-freebsd.pkg
+    sudo pkg add mtr-rs-0.3.0-aarch64-freebsd.pkg
 
     # from a checkout, with man pages and bash/zsh/fish completions
     cargo build --release --workspace && cargo xtask dist
