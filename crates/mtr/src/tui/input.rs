@@ -123,9 +123,8 @@ pub fn parse_prompt(
             if !is_root && f < 1.0 {
                 return Err("non-root users cannot request an interval < 1.0 seconds".to_string());
             }
-            Ok(UserAction::SetInterval(
-                (f * 1000.0).round().min(f64::from(u32::MAX)) as u32,
-            ))
+            // `validate_seconds` bounded `f` to (0, MAX_SECONDS], so the product fits `u64`.
+            Ok(UserAction::SetInterval((f * 1000.0).round() as u64))
         }
         PromptKind::FirstTtl => {
             let n = parse_c_long(text)?;
@@ -396,6 +395,14 @@ mod tests {
             p(PromptKind::Interval, "2.5"),
             Ok(UserAction::SetInterval(2500))
         );
+        // The one-year ceiling is 31 536 000 000 ms, past u32::MAX: it must not be clamped.
+        let year = crate::cli::MAX_SECONDS.to_string();
+        assert_eq!(
+            p(PromptKind::Interval, &year),
+            Ok(UserAction::SetInterval(31_536_000_000))
+        );
+        let over = (crate::cli::MAX_SECONDS + 1.0).to_string();
+        assert!(p(PromptKind::Interval, &over).is_err());
         assert_eq!(
             p(PromptKind::Interval, "0"),
             Err("wait time must be positive".into())

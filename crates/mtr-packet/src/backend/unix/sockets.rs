@@ -357,10 +357,10 @@ mod tests {
             return false;
         };
         for line in status.lines() {
-            if let Some(hex) = line.strip_prefix("CapEff:") {
-                if let Ok(val) = u64::from_str_radix(hex.trim(), 16) {
-                    return val & (1 << 13) != 0;
-                }
+            if let Some(hex) = line.strip_prefix("CapEff:")
+                && let Ok(val) = u64::from_str_radix(hex.trim(), 16)
+            {
+                return val & (1 << 13) != 0;
             }
         }
         false

@@ -7,7 +7,7 @@ exclude = ["crates/mtr-proto/fuzz", "crates/mtr-packet/fuzz"]
 version = "0.3.0"
 edition = "2024"
 license = "GPL-2.0-only"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 # The `version` is redundant for a path build but keeps these from reading as wildcard
