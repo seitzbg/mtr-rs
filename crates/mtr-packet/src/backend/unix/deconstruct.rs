@@ -108,7 +108,9 @@ pub fn decode_mpls(icmp: &[u8]) -> Vec<MplsLabel> {
         }
         if objs[2] == ICMP_EXT_MPLS_CLASSNUM && objs[3] == ICMP_EXT_MPLS_CTYPE {
             return objs[ICMP_EXT_OBJECT..len]
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .take(MAX_MPLS_LABELS)
                 .map(|l| MplsLabel {
                     label: (u32::from(l[0]) << 12)
