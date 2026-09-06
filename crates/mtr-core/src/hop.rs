@@ -145,6 +145,15 @@ impl Hop {
         self.history.record(saved_seq, Sample::Lost);
     }
 
+    /// Finding 4: a terminal send/connect failure the helper reported for one probe (no address,
+    /// no RTT). Pin the error on the hop so it is displayed, and log the probe as lost. No timeout
+    /// will follow — the helper has already dropped the probe — so this is the only record of it.
+    pub fn record_send_error(&mut self, err: HopError, saved_seq: u32) {
+        self.err = Some(err);
+        self.outstanding = false;
+        self.history.record(saved_seq, Sample::Lost);
+    }
+
     /// `net_reset()` for one hop: back to the zeroed template.
     pub fn reset(&mut self) {
         *self = Hop::new(self.history.capacity());

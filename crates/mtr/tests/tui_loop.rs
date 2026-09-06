@@ -9,6 +9,7 @@ use mtr::driver::Driver;
 use mtr::emit::{ReportContext, report_on_exit_text};
 use mtr::helper::spawn_with;
 use mtr::names::NameCache;
+use mtr::resolver::ResolverConfig;
 use mtr::tui::{Depth, Glyphs, Palette, TuiOptions, run};
 use mtr_core::{Config, Engine};
 use ratatui::Terminal;
@@ -61,7 +62,11 @@ async fn session(keys: Vec<(u64, std::io::Result<Event>)>, cfg: Config) -> Sessi
     });
     let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
     let interrupted = {
-        let mut driver = Driver::new(&mut engine, &mut helper, None, &mut names);
+        let rcfg = ResolverConfig {
+            provider4: "origin.asn.cymru.com".into(),
+            provider6: "origin6.asn.cymru.com".into(),
+        };
+        let mut driver = Driver::new(&mut engine, &mut helper, None, rcfg, &mut names);
         let opts = TuiOptions {
             glyphs: Glyphs::select(false),
             palette: Palette::new(Depth::Mono),

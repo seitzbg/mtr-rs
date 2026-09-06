@@ -16,7 +16,10 @@ done
 cargo xtask dist --no-build >/dev/null
 
 version=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-abi=$(pkg config ABI)
+# Wildcard the OS-version field of the ABI (e.g. FreeBSD:14:amd64 -> FreeBSD:*:amd64) so one
+# package installs across FreeBSD major versions; pkg on 15-STABLE/15.1 otherwise rejects a
+# package built against a different major.
+abi=$(pkg config ABI | sed -E 's/^([^:]+):[^:]+:/\1:*:/')
 stage=target/freebsd/stage
 out=target/freebsd
 rm -rf "$stage"
@@ -50,6 +53,9 @@ tar tvf "$pkgfile" | grep -E ' /usr/local/bin/mtr-rs$' | grep -qv 'rws' || { ech
 info=$(pkg info -F "$pkgfile")
 echo "$info" | grep -q "^Version *: $version\$" || { echo "wrong version in package" >&2; echo "$info" >&2; exit 1; }
 echo "$info" | grep -q '^Licenses *: GPLv2' || { echo "licence missing" >&2; echo "$info" >&2; exit 1; }
-echo "$info" | grep -q "^Architecture *: $abi\$" || { echo "wrong ABI in package" >&2; echo "$info" >&2; exit 1; }
+# Compare the Architecture field literally: a wildcarded ABI contains '*', which grep would treat
+# as a regex quantifier.
+arch=$(echo "$info" | sed -n 's/^Architecture *: *//p')
+[ "$arch" = "$abi" ] || { echo "wrong ABI in package (got '$arch', want '$abi')" >&2; echo "$info" >&2; exit 1; }
 echo "pkg ok"
 echo "$pkgfile"

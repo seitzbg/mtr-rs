@@ -406,8 +406,28 @@ impl Engine {
                 }
                 // `transit` deliberately stays set: C never learns about timeouts (cmdpipe.c:768-782).
             }
-            _ => {} // handshake and error replies belong to the client
+            // Finding 4: terminal send/connect failures the helper maps to these bare responses.
+            // They are not fatal, so the driver forwards them here; record them on the hop instead
+            // of dropping them, or a real routing failure looks like a successful empty report.
+            ResponseKind::NetworkDown => self.record_probe_failure(seq, HopError::NetworkDown),
+            ResponseKind::HostDown => self.record_probe_failure(seq, HopError::HostDown),
+            ResponseKind::NoRouteNetwork => {
+                self.record_probe_failure(seq, HopError::NoRouteNetwork)
+            }
+            ResponseKind::NoRouteHost => self.record_probe_failure(seq, HopError::NoRouteHost),
+            _ => {} // handshake and the remaining error replies belong to the client
         }
+    }
+
+    /// A terminal error the helper reported for probe `seq` (Finding 4): mark the token no longer
+    /// in transit and pin the error on its hop, so the failure is shown rather than discarded.
+    fn record_probe_failure(&mut self, seq: usize, err: HopError) {
+        let slot = self.seqs[seq];
+        if !slot.transit {
+            return;
+        }
+        self.seqs[seq].transit = false;
+        self.hops[usize::from(slot.hop)].record_send_error(err, slot.saved_seq);
     }
 
     fn on_action(&mut self, a: UserAction) {
@@ -859,6 +879,54 @@ mod tests {
         );
         assert_eq!(e.hops()[0].err, Some(crate::HopError::NoRouteHost));
         assert_eq!(e.display_range(), 0..1);
+    }
+
+    /// Finding 4: a send/connect failure the helper maps to a bare `network-down` / `host-down` /
+    /// `no-route-network` / `no-route-host` must surface as the failing hop, not vanish into a
+    /// successful empty report. The helper has already dropped the probe, so no timeout repairs it.
+    #[test]
+    fn terminal_send_errors_show_the_failing_hop() {
+        for (kind, err) in [
+            (ResponseKind::NetworkDown, crate::HopError::NetworkDown),
+            (ResponseKind::HostDown, crate::HopError::HostDown),
+            (
+                ResponseKind::NoRouteNetwork,
+                crate::HopError::NoRouteNetwork,
+            ),
+            (ResponseKind::NoRouteHost, crate::HopError::NoRouteHost),
+        ] {
+            let (mut e, t0) = engine(cfg());
+            e.handle(Event::Tick, t0);
+            e.handle(Event::Probe { token: 33000, kind }, t0);
+            assert_eq!(e.hops()[0].err, Some(err), "{err:?}");
+            // The hop is now displayed rather than leaving an empty range (the empty-report bug).
+            assert_eq!(e.display_range(), 0..1, "{err:?}");
+        }
+    }
+
+    /// Finding 4, the second case: a terminal error for a hop already known pins the error on it.
+    #[test]
+    fn a_terminal_error_records_on_an_already_known_hop() {
+        let (mut e, t0) = engine(Config {
+            max_ttl: 1,
+            ..cfg()
+        });
+        let cmds = e.handle(Event::Tick, t0);
+        let tok1 = sends(&cmds)[0].0;
+        e.handle(probe(tok1, "10.0.0.1", 100), t0);
+        assert_eq!(e.hops()[0].addr, Some("10.0.0.1".parse().unwrap()));
+        assert_eq!(e.hops()[0].err, None);
+        let now = wake(&cmds);
+        let cmds2 = e.handle(Event::Tick, now);
+        let tok2 = sends(&cmds2)[0].0;
+        e.handle(
+            Event::Probe {
+                token: tok2,
+                kind: ResponseKind::NoRouteNetwork,
+            },
+            now,
+        );
+        assert_eq!(e.hops()[0].err, Some(crate::HopError::NoRouteNetwork));
     }
 
     #[test]

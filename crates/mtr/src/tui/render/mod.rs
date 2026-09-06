@@ -86,10 +86,21 @@ pub fn table_capacity(area: Rect, ui: &UiState) -> usize {
 }
 
 pub fn bounds(area: Rect, engine: &Engine, ui: &UiState) -> Bounds {
+    let range = engine.display_range();
+    // Rendered-row offset where each displayed hop begins, plus a final total (Finding 5). The
+    // table expands each hop into its primary row plus ECMP/MPLS continuation rows, so scrolling
+    // and visibility are computed from these rows rather than hop indices.
+    let all = table::rows(engine);
+    let mut row_starts = Vec::with_capacity(range.len() + 1);
+    for at in range.clone() {
+        row_starts.push(all.iter().position(|r| r.at == at).unwrap_or(all.len()));
+    }
+    row_starts.push(all.len());
     Bounds {
-        range: engine.display_range(),
+        range,
         visible_rows: table_capacity(area, ui),
         pane_allowed: pane_allowed(area),
+        row_starts,
     }
 }
 

@@ -169,7 +169,14 @@ pub fn set_mark_and_device(sock: &Socket, params: &CProbeParams) -> std::io::Res
         sock.set_mark(params.routing_mark)?;
     }
     if let Some(dev) = &params.local_device {
-        sock.bind_device(Some(dev.as_bytes()))?;
+        // Re-issuing `SO_BINDTODEVICE` for the same device still needs `CAP_NET_RAW`, which the
+        // helper drops before serving; only the first bind of an unbound socket is unprivileged.
+        // The send sockets are shared across probes, so skip the call when the binding already
+        // matches — otherwise every `-I` probe after the first failed with `EPERM` (Finding 1).
+        let already_bound = sock.device()?.as_deref() == Some(dev.as_bytes());
+        if !already_bound {
+            sock.bind_device(Some(dev.as_bytes()))?;
+        }
     }
     Ok(())
 }
@@ -545,5 +552,31 @@ mod tests {
         apply_probe_options(&unbound, 4, &params, None, false).unwrap();
         assert_eq!(unbound.ttl_v4().unwrap(), 7);
         assert_eq!(unbound.local_addr().unwrap().as_socket().unwrap().port(), 0);
+    }
+
+    /// Regression (Finding 1): the shared send socket must keep its `-I` device binding across
+    /// probes. Linux lets an unprivileged process bind an *unbound* socket to a device but needs
+    /// `CAP_NET_RAW` to *re-set* `SO_BINDTODEVICE` — even to the same device — and the helper has
+    /// already dropped it. So the second probe over one socket must not re-issue the binding; it
+    /// used to fail the whole `-I` trace with `permission-denied` on probe two. Root/`cap_net_raw`
+    /// hosts never see the EPERM, so this only bites (and only proves the fix) unprivileged.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn device_binding_is_not_repeated_across_probes() {
+        if !probe_sockets_available(4) {
+            eprintln!("skipping: no IPv4 probe sockets");
+            return;
+        }
+        let f = Family::open(4).unwrap();
+        let params = mtr_proto::CProbeParams {
+            ttl: 1,
+            local_device: Some("lo".to_string()),
+            ..Default::default()
+        };
+        let local: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        // First probe establishes the binding; the second must succeed without re-binding.
+        apply_probe_options(f.icmp_send(), 4, &params, Some(local), f.is_raw()).unwrap();
+        apply_probe_options(f.icmp_send(), 4, &params, Some(local), f.is_raw()).unwrap();
+        assert_eq!(f.icmp_send().device().unwrap().as_deref(), Some(&b"lo"[..]));
     }
 }

@@ -9,7 +9,7 @@ use mtr_proto::{Request, RequestKind};
 
 use crate::helper::{Helper, HelperEvent, fatal_message};
 use crate::names::{LookupResult, NameCache};
-use crate::resolver::{LookupRequest, Resolver};
+use crate::resolver::{LookupRequest, Resolver, ResolverConfig};
 
 pub struct RunOutcome {
     /// Ctrl-C ended the run (exit code 130, report still printed — as C).
@@ -35,7 +35,11 @@ pub struct Step {
 pub struct Driver<'a> {
     pub engine: &'a mut Engine,
     pub helper: &'a mut Helper,
-    pub resolver: Option<&'a mut Resolver>,
+    /// Absent until a lookup type is enabled: a `-n` session with no `-z` starts without one and
+    /// creates it lazily on the first enable (Finding 3).
+    resolver: Option<Resolver>,
+    /// Providers a lazily created resolver is built with.
+    resolver_config: ResolverConfig,
     pub names: &'a mut NameCache,
     /// Next `Wake::Tick`; `None` while the engine is paused or finished.
     pub deadline: Option<Instant>,
@@ -45,13 +49,15 @@ impl<'a> Driver<'a> {
     pub fn new(
         engine: &'a mut Engine,
         helper: &'a mut Helper,
-        resolver: Option<&'a mut Resolver>,
+        resolver: Option<Resolver>,
+        resolver_config: ResolverConfig,
         names: &'a mut NameCache,
     ) -> Self {
         Driver {
             engine,
             helper,
             resolver,
+            resolver_config,
             names,
             deadline: Some(Instant::now()),
         }
@@ -170,6 +176,21 @@ impl<'a> Driver<'a> {
     async fn request_lookups(&mut self, ip: IpAddr) {
         let cfg = self.engine.config();
         let (want_ptr, want_asn) = (cfg.dns, !cfg.ipinfo_fields.is_empty());
+        if !want_ptr && !want_asn {
+            return;
+        }
+        // Create the resolver the first time a lookup type is enabled (Finding 3): a `-n` session
+        // starts without one, and toggling DNS/ASN interactively must be able to turn lookups on.
+        // A build failure (e.g. no resolver config) leaves it absent and this run stays nameless.
+        if self.resolver.is_none() {
+            match Resolver::start(self.resolver_config.clone()) {
+                Ok(r) => self.resolver = Some(r),
+                Err(e) => {
+                    tracing::warn!("name resolution unavailable: {e}");
+                    return;
+                }
+            }
+        }
         let Some(res) = self.resolver.as_mut() else {
             return;
         };
@@ -225,6 +246,13 @@ mod tests {
         ))
     }
 
+    fn resolver_cfg() -> ResolverConfig {
+        ResolverConfig {
+            provider4: "origin.asn.cymru.com".into(),
+            provider6: "origin6.asn.cymru.com".into(),
+        }
+    }
+
     #[tokio::test]
     async fn step_drives_one_wake_and_tracks_the_deadline() {
         use crate::helper::spawn_with;
@@ -241,7 +269,7 @@ mod tests {
         };
         let mut engine = Engine::new(cfg, "192.0.2.1".parse().unwrap(), None, Instant::now(), 1);
         let mut names = NameCache::default();
-        let mut d = Driver::new(&mut engine, &mut helper, None, &mut names);
+        let mut d = Driver::new(&mut engine, &mut helper, None, resolver_cfg(), &mut names);
         assert!(d.deadline.is_some());
         let s = d.step(Wake::Tick).await.unwrap();
         assert!(!s.finished);
@@ -271,6 +299,42 @@ mod tests {
         assert!(d.engine.is_finished());
     }
 
+    /// Finding 3: a session started with `-n` and no `-z` has no resolver. Pressing `n` must
+    /// create one and queue PTR lookups for hops already discovered — it used to update the
+    /// config flag while `request_lookups` returned early on the absent resolver, so names never
+    /// appeared for the rest of the run.
+    #[tokio::test]
+    async fn toggling_dns_after_a_nameless_start_enables_lookups() {
+        use crate::helper::spawn_with;
+        use mtr_core::{Config, Engine, UserAction};
+        let mut helper = spawn_with(&[fake()], false, mtr_proto::Protocol::Icmp, 0)
+            .await
+            .unwrap();
+        let cfg = Config {
+            interactive: true,
+            max_ttl: 1,
+            dns: false,
+            ipinfo_fields: Vec::new(),
+            ..Config::default()
+        };
+        let mut engine = Engine::new(cfg, "192.0.2.1".parse().unwrap(), None, Instant::now(), 1);
+        let mut names = NameCache::default();
+        let mut d = Driver::new(&mut engine, &mut helper, None, resolver_cfg(), &mut names);
+        // Discover hop 1's address (10.0.0.1 from the fake) with lookups off.
+        d.step(Wake::Tick).await.unwrap();
+        let w = tokio::time::timeout(Duration::from_secs(2), d.wait_wake())
+            .await
+            .unwrap();
+        d.step(w).await.unwrap();
+        assert_eq!(d.engine.hops()[0].addr, Some("10.0.0.1".parse().unwrap()));
+        assert!(d.resolver.is_none(), "nameless start has no resolver");
+        assert_eq!(d.names.pending(), 0);
+        // Pressing `n` creates the resolver and enqueues the known hop's PTR lookup.
+        d.step(Wake::Action(UserAction::ToggleDns)).await.unwrap();
+        assert!(d.resolver.is_some(), "resolver created on first enable");
+        assert!(d.names.pending() > 0, "known hop's PTR lookup enqueued");
+    }
+
     #[tokio::test]
     async fn helper_exit_is_a_step_error() {
         use crate::helper::spawn_with;
@@ -286,7 +350,7 @@ mod tests {
             1,
         );
         let mut names = NameCache::default();
-        let mut d = Driver::new(&mut engine, &mut helper, None, &mut names);
+        let mut d = Driver::new(&mut engine, &mut helper, None, resolver_cfg(), &mut names);
         let err = d
             .step(Wake::Helper(Some(HelperEvent::Exited)))
             .await
