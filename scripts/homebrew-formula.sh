@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Print the Homebrew formula for a published release, with the tarball checksums filled in:
 #
-#   scripts/homebrew-formula.sh 0.4.0 > ../homebrew-mtr-rs/Formula/mtr-rs.rb
+#   scripts/homebrew-formula.sh 0.4.1 > ../homebrew-mtr-rs/Formula/mtr-rs.rb
 #
 # The tap lives at https://github.com/seitzbg/homebrew-mtr-rs. The formula installs the
 # prebuilt release tarballs (macOS and Linux, both architectures); Homebrew does not install

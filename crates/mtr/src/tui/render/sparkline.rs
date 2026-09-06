@@ -60,7 +60,10 @@ pub enum Cell {
     /// (for `Palette::rtt`'s absolute colour — deviation 25).
     Rtt(usize, u32),
     Lost,
+    /// No sample recorded yet at this position (history shorter than the sparkline width).
     Pending,
+    /// A probe was sent and is still waiting on a reply or timeout.
+    InFlight,
 }
 
 /// The newest `width` samples, oldest first, left-padded with `Pending` when the history is short.
@@ -72,7 +75,7 @@ pub fn cells(history: &History, width: usize, scale: &Scale) -> Vec<Cell> {
     out.extend(history.iter().skip(skip).map(|s| match s {
         Sample::Rtt(us) => Cell::Rtt(scale.bucket(*us), *us),
         Sample::Lost => Cell::Lost,
-        Sample::Pending { .. } => Cell::Pending,
+        Sample::Pending { .. } => Cell::InFlight,
     }));
     out
 }
@@ -96,6 +99,7 @@ pub fn glyph(cell: &Cell, g: &Glyphs, mono: bool) -> &'static str {
         Cell::Lost if mono => g.loss_mono,
         Cell::Lost => g.loss,
         Cell::Pending => g.pending,
+        Cell::InFlight => g.in_flight,
     }
 }
 
@@ -218,6 +222,34 @@ mod tests {
         assert_eq!(
             cells_for_hop(&h, 2, &s),
             vec![Cell::Rtt(0, 1000), Cell::Lost]
+        );
+    }
+
+    #[test]
+    fn a_probe_still_awaiting_reply_or_timeout_is_in_flight_not_blank() {
+        let t = Instant::now();
+        let mut h = hop_with(&[Sample::Lost]);
+        h.stats.returned = 0; // never answered, but has sent a probe that's still outstanding
+        h.record_send(t);
+        let s = Scale {
+            low_us: 0,
+            high_us: 0,
+        };
+        // received() == 0 blanks the whole row (deviation for never-answered hops); an
+        // in-flight probe only reads distinctly once the hop has answered at least once.
+        h.stats.returned = 1;
+        assert_eq!(
+            cells(&h.history, 2, &s),
+            vec![Cell::Lost, Cell::InFlight],
+            "the outstanding send must not render as the same blank as unfilled history"
+        );
+        assert_ne!(
+            glyph(&Cell::InFlight, &UNICODE, false),
+            glyph(&Cell::Pending, &UNICODE, false)
+        );
+        assert_ne!(
+            glyph(&Cell::InFlight, &ASCII, false),
+            glyph(&Cell::Pending, &ASCII, false)
         );
     }
 }

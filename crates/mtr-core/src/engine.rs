@@ -354,6 +354,11 @@ impl Engine {
         if seq >= MAX_SEQUENCE as usize {
             return;
         }
+        // Replies for probes already in flight when Pause was pressed would otherwise keep
+        // landing in history after `[PAUSED]` shows; drop them so the display freezes immediately.
+        if self.paused {
+            return;
+        }
         match kind {
             ResponseKind::Probe {
                 result,
@@ -701,6 +706,28 @@ mod tests {
         assert!(
             cmds.contains(&Command::Finished),
             "a NaN grace time collapses to zero"
+        );
+    }
+
+    #[test]
+    fn a_reply_arriving_after_pause_is_dropped() {
+        let (mut e, t0) = engine(cfg());
+        e.handle(Event::Tick, t0); // sends the in-flight probe
+        e.handle(Event::Action(UserAction::Pause), t0);
+        let cmds = e.handle(
+            probe(33000, "10.0.0.1", 1500),
+            t0 + Duration::from_millis(2),
+        );
+        assert!(
+            resolves(&cmds).is_empty(),
+            "no history/address update while paused"
+        );
+        let h = &e.hops()[0];
+        assert_eq!(h.addr, None);
+        assert!(
+            matches!(h.history.latest(), Some(crate::Sample::Pending { .. })),
+            "the send is recorded but the reply must not overwrite it: {:?}",
+            h.history.latest()
         );
     }
 

@@ -231,6 +231,7 @@ pub fn render(view: &View, area: Rect, buf: &mut Buffer) {
                             crate::tui::render::sparkline::Cell::Rtt(_, us) => pal.rtt(us),
                             crate::tui::render::sparkline::Cell::Lost => pal.lost_sample(),
                             crate::tui::render::sparkline::Cell::Pending => Style::new(),
+                            crate::tui::render::sparkline::Cell::InFlight => pal.dim(),
                         };
                         spans.push(Span::styled(
                             glyph(&c, g, pal.depth == crate::tui::palette::Depth::Mono),
