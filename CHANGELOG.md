@@ -6,6 +6,26 @@ All notable changes to mtr-rs are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-06
+
+### Fixed
+- `-I <interface>` failed on Linux after the first probe on hosts using the unprivileged
+  ping-socket fallback (no `cap_net_raw`): the shared socket's device binding was re-applied on
+  every probe and rejected with `permission-denied` once the helper had dropped its capability,
+  aborting the trace. The binding is now applied only once.
+- `-I` failed on its first probe on FreeBSD: the resolved interface was still sent to the helper as
+  a device to bind, which FreeBSD rejects. `-I` is now resolved to a source address on every
+  platform, and the device is forwarded to the helper (via `SO_BINDTODEVICE`) only on Linux.
+- Pressing `n` or `z` to turn on DNS or ASN lookups did nothing when the session had started with
+  `-n` and no `-z`: no resolver existed, so the toggle flipped the setting but no lookups ran. The
+  resolver is now created the first time a lookup type is enabled.
+- A local send failure (`network-down`, `host-down`, `no-route-network`, `no-route-host`) was
+  discarded, so a genuine routing failure produced a successful-looking empty report. It now shows
+  as a failing hop (for example `(no route to network)`) and counts as a drop.
+- Scrolling the hop table counted hops instead of rendered rows, so a hop pushed below the viewport
+  by ECMP addresses or MPLS labels could not be reached by selection or Page Down. Scrolling and
+  visibility now count rendered rows.
+
 ## [0.4.1] - 2026-09-06
 
 ### Fixed
@@ -177,7 +197,8 @@ First release of the Rust port of mtr 0.96 (upstream commit 7b01773).
 - GitHub Actions pinned to commit SHAs, read-only tokens except for the release publish step, and
   cargo-deny in CI.
 
-[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/seitzbg/mtr-rs/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/seitzbg/mtr-rs/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/seitzbg/mtr-rs/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/seitzbg/mtr-rs/compare/v0.2.1...v0.3.0
