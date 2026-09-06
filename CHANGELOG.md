@@ -6,6 +6,17 @@ All notable changes to mtr-rs are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-06
+
+### Fixed
+- The TUI sparkline kept updating for a moment after pausing (`p`): replies and timeouts for
+  probes already in flight were still being recorded into history even though `[PAUSED]` was
+  showing. Those are now dropped while paused.
+- A chronically-lossy hop's sparkline looked like it had stopped growing before reaching the
+  right edge: probes still awaiting a reply or timeout rendered identically to "no data yet"
+  (blank). They now get their own dim marker, distinct from both a confirmed drop and an
+  unfilled cell.
+
 ## [0.4.0] - 2026-09-06
 
 ### Added
@@ -166,7 +177,8 @@ First release of the Rust port of mtr 0.96 (upstream commit 7b01773).
 - GitHub Actions pinned to commit SHAs, read-only tokens except for the release publish step, and
   cargo-deny in CI.
 
-[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/seitzbg/mtr-rs/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/seitzbg/mtr-rs/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/seitzbg/mtr-rs/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/seitzbg/mtr-rs/compare/v0.2.0...v0.2.1
