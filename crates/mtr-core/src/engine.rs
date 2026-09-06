@@ -901,6 +901,9 @@ mod tests {
             assert_eq!(e.hops()[0].err, Some(err), "{err:?}");
             // The hop is now displayed rather than leaving an empty range (the empty-report bug).
             assert_eq!(e.display_range(), 0..1, "{err:?}");
+            // A definitive send failure counts as a drop immediately, not an in-flight probe.
+            assert_eq!(e.hops()[0].dropped(), 1, "{err:?}");
+            assert!(e.hops()[0].loss() > 0, "{err:?}");
         }
     }
 

@@ -148,9 +148,15 @@ impl Hop {
     /// Finding 4: a terminal send/connect failure the helper reported for one probe (no address,
     /// no RTT). Pin the error on the hop so it is displayed, and log the probe as lost. No timeout
     /// will follow — the helper has already dropped the probe — so this is the only record of it.
+    ///
+    /// Unlike a timeout (`record_no_reply`, which leaves the probe in transit because C never
+    /// learns of timeouts), a send failure is a definitive reply, so clear `transit` — as
+    /// `record_reply` does — and the failed probe counts as a drop straight away instead of an
+    /// in-flight probe excluded from the loss figure until the next send or `end_transit`.
     pub fn record_send_error(&mut self, err: HopError, saved_seq: u32) {
         self.err = Some(err);
         self.outstanding = false;
+        self.stats.transit = 0;
         self.history.record(saved_seq, Sample::Lost);
     }
 
