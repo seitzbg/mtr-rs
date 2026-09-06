@@ -18,7 +18,7 @@ source; GitHub cannot virtualise it and emulation took over an hour).
 
 ## 0.4
 
-Everything planned for 0.4 has landed (see above); it ships as the next tag.
+Released as 0.4.0 on 2026-09-06 with everything above.
 
 ## Later
 

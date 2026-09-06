@@ -6,6 +6,8 @@ All notable changes to mtr-rs are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-06
+
 ### Added
 - The macOS binaries are signed with a Developer ID certificate (hardened runtime, timestamped)
   and notarized, so a downloaded tarball runs without clearing the quarantine flag. The release
@@ -164,7 +166,8 @@ First release of the Rust port of mtr 0.96 (upstream commit 7b01773).
 - GitHub Actions pinned to commit SHAs, read-only tokens except for the release publish step, and
   cargo-deny in CI.
 
-[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/seitzbg/mtr-rs/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/seitzbg/mtr-rs/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/seitzbg/mtr-rs/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/seitzbg/mtr-rs/compare/v0.1.0...v0.2.0
