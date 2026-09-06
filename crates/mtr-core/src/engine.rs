@@ -714,7 +714,10 @@ mod tests {
         let (mut e, t0) = engine(cfg());
         e.handle(Event::Tick, t0); // sends the in-flight probe
         e.handle(Event::Action(UserAction::Pause), t0);
-        let cmds = e.handle(probe(33000, "10.0.0.1", 1500), t0 + Duration::from_millis(2));
+        let cmds = e.handle(
+            probe(33000, "10.0.0.1", 1500),
+            t0 + Duration::from_millis(2),
+        );
         assert!(
             resolves(&cmds).is_empty(),
             "no history/address update while paused"
