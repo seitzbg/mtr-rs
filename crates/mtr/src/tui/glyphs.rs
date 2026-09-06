@@ -12,6 +12,9 @@ pub struct Glyphs {
     /// RTT bucket.
     pub loss_mono: &'static str,
     pub pending: &'static str,
+    /// A sent probe still waiting on its reply/timeout: distinct from `pending` (no data yet)
+    /// so a chronically-lossy hop's trailing in-flight probes don't read as a blank gap.
+    pub in_flight: &'static str,
     /// Selected-row marker in the table.
     pub selected: &'static str,
     /// Loss row under the RTT chart.
@@ -34,6 +37,7 @@ pub static UNICODE: Glyphs = Glyphs {
     loss: "▁",
     loss_mono: "•",
     pending: " ",
+    in_flight: "·",
     selected: "▶",
     lost_mark: "•",
     arrow: "→",
@@ -49,6 +53,7 @@ pub static ASCII: Glyphs = Glyphs {
     loss: "_",
     loss_mono: "x",
     pending: " ",
+    in_flight: "'",
     selected: ">",
     lost_mark: "x",
     arrow: "->",
@@ -87,6 +92,7 @@ mod tests {
             ASCII.loss,
             ASCII.loss_mono,
             ASCII.pending,
+            ASCII.in_flight,
             ASCII.selected,
             ASCII.lost_mark,
             ASCII.arrow,
