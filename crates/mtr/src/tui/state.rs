@@ -115,6 +115,46 @@ pub struct Bounds {
     pub visible_rows: usize,
     /// False when the terminal is too short for the detail pane.
     pub pane_allowed: bool,
+    /// The first rendered-row offset of each hop in `range` (relative to the top of the display
+    /// range), with a final entry equal to the total rendered-row count. A hop expands into its
+    /// primary row plus ECMP/MPLS continuation rows, so scrolling must count rendered rows, not
+    /// hops (Finding 5). Built by [`crate::tui::render::bounds`] from the table's `TableRow`s.
+    pub row_starts: Vec<usize>,
+}
+
+impl Bounds {
+    /// Total rendered rows across the display range.
+    pub fn total_rows(&self) -> usize {
+        self.row_starts.last().copied().unwrap_or(0)
+    }
+
+    /// The rendered-row offset where hop `at`'s primary row begins.
+    fn hop_first_row(&self, at: usize) -> usize {
+        let i = at.saturating_sub(self.range.start);
+        self.row_starts
+            .get(i)
+            .copied()
+            .unwrap_or_else(|| self.total_rows())
+    }
+
+    /// One past hop `at`'s last rendered row.
+    fn hop_end_row(&self, at: usize) -> usize {
+        let i = at.saturating_sub(self.range.start) + 1;
+        self.row_starts
+            .get(i)
+            .copied()
+            .unwrap_or_else(|| self.total_rows())
+    }
+
+    /// The hop whose rendered rows contain `row` (the last hop for a row past the end).
+    fn hop_at_row(&self, row: usize) -> usize {
+        for at in self.range.clone() {
+            if row < self.hop_end_row(at) {
+                return at;
+            }
+        }
+        self.range.end.saturating_sub(1).max(self.range.start)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,7 +222,9 @@ impl UiState {
         }
     }
 
-    /// Keep `selected` inside `range` and `scroll` such that the selection is visible.
+    /// Keep `selected` inside `range` and `scroll` (a rendered-row offset) such that the selected
+    /// hop is on screen. Visibility is computed in rendered rows, so a hop whose ECMP/MPLS
+    /// continuation rows push it below the viewport is still reachable (Finding 5).
     pub fn clamp(&mut self, b: &Bounds) {
         let (lo, hi) = (b.range.start, b.range.end);
         self.selected = if hi > lo {
@@ -191,16 +233,25 @@ impl UiState {
             lo
         };
         let rows = b.visible_rows.max(1);
-        let max_scroll = hi.saturating_sub(rows).max(lo);
-        self.scroll = self.scroll.clamp(lo, max_scroll);
-        if self.selected < self.scroll {
-            self.scroll = self.selected;
-        } else if self.selected >= self.scroll + rows {
-            self.scroll = self.selected + 1 - rows;
+        let max_scroll = b.total_rows().saturating_sub(rows);
+        self.scroll = self.scroll.min(max_scroll);
+        if hi <= lo {
+            self.scroll = 0;
+            return;
         }
-        // invariant every `apply` restores: the scroll offset names a hop inside `range`, and the
-        // selection is on screen. `render::table::first_row_of` relies on it.
-        debug_assert!(self.scroll >= lo && (hi <= lo || self.scroll <= max_scroll));
+        // Bring the selected hop into view, preferring its primary row. A hop already overlapping
+        // the window is left as is, so scrolling within a hop taller than the viewport sticks.
+        let first = b.hop_first_row(self.selected);
+        let end = b.hop_end_row(self.selected);
+        if first >= self.scroll + rows {
+            self.scroll = (first + 1).saturating_sub(rows);
+        } else if end <= self.scroll {
+            self.scroll = first;
+        }
+        self.scroll = self.scroll.min(max_scroll);
+        // invariant every `apply` restores: `scroll` names a rendered row and the selected hop is
+        // on screen. `render::table::render` skips `scroll` rows of the expanded table.
+        debug_assert!(self.scroll <= max_scroll);
     }
 
     pub fn apply(&mut self, a: UiAction, b: &Bounds, now: Instant) -> Option<Submitted> {
@@ -209,14 +260,16 @@ impl UiState {
             UiAction::SelectDown => self.selected += 1,
             UiAction::ScrollDown => {
                 let rows = b.visible_rows.max(1);
-                let max_scroll = b.range.end.saturating_sub(rows).max(b.range.start);
+                let max_scroll = b.total_rows().saturating_sub(rows);
                 self.scroll = (self.scroll + SCROLL_STEP).min(max_scroll);
-                self.selected = self.selected.max(self.scroll);
+                // Don't let the selection lag above the new viewport top.
+                self.selected = self.selected.max(b.hop_at_row(self.scroll));
             }
             UiAction::ScrollUp => {
-                self.scroll = self.scroll.saturating_sub(SCROLL_STEP).max(b.range.start);
+                self.scroll = self.scroll.saturating_sub(SCROLL_STEP);
                 let rows = b.visible_rows.max(1);
-                self.selected = self.selected.min(self.scroll + rows - 1);
+                // Don't let the selection drop below the new viewport bottom.
+                self.selected = self.selected.min(b.hop_at_row(self.scroll + rows - 1));
             }
             UiAction::TogglePane => self.pane_open = !self.pane_open,
             UiAction::NextTab => self.tab = self.tab.next(),
@@ -267,11 +320,14 @@ impl UiState {
 mod tests {
     use super::*;
 
+    /// One rendered row per hop (the common case with no ECMP/MPLS continuation rows).
     fn b(range: std::ops::Range<usize>, rows: usize) -> Bounds {
+        let row_starts = (0..=range.len()).collect();
         Bounds {
             range,
             visible_rows: rows,
             pane_allowed: true,
+            row_starts,
         }
     }
 
@@ -289,9 +345,10 @@ mod tests {
             ui.apply(UiAction::SelectUp, &bounds, now);
         }
         assert_eq!((ui.selected, ui.scroll), (0, 0));
-        // first_ttl 3: range starts at 2
+        // first_ttl 3: range starts at 2. `scroll` is a row offset from the display top, so the
+        // top of the range is 0 (not the absolute hop index).
         ui.clamp(&b(2..5, 4));
-        assert_eq!((ui.selected, ui.scroll), (2, 2));
+        assert_eq!((ui.selected, ui.scroll), (2, 0));
         ui.clamp(&b(2..2, 4));
         assert_eq!(
             ui.selected, 2,

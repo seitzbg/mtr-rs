@@ -1,6 +1,7 @@
 //! Hop table (spec §8 item 2); ports the row layout of `mtr_curses_hosts()` (ui/curses.c:449-560,
 //! mtr 0.96, commit 7b01773) to a scrolling, selectable table with a sparkline column. GPL-2.0-only.
 
+use mtr_core::Engine;
 use mtr_core::fields::{FieldFormat, active_fields, format_title, format_value};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -36,8 +37,7 @@ pub struct TableRow {
     pub kind: RowKind,
 }
 
-pub fn rows(view: &View) -> Vec<TableRow> {
-    let e = view.engine;
+pub fn rows(e: &Engine) -> Vec<TableRow> {
     let cfg = e.config();
     let mut out = Vec::new();
     for at in e.display_range() {
@@ -82,21 +82,6 @@ pub fn rows(view: &View) -> Vec<TableRow> {
         }
     }
     out
-}
-
-/// Index of `at`'s hop row. `ui.clamp` keeps `ui.scroll` inside `display_range()`, so a miss is a
-/// bug in the caller, not a state the table should paper over silently.
-pub fn first_row_of(rows: &[TableRow], at: usize) -> usize {
-    match rows
-        .iter()
-        .position(|r| r.at == at && r.kind == RowKind::Hop)
-    {
-        Some(i) => i,
-        None => {
-            debug_assert!(rows.is_empty(), "scroll offset {at} is not a displayed hop");
-            0
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,8 +173,9 @@ pub fn render(view: &View, area: Rect, buf: &mut Buffer) {
     }
     buf.set_line(area.x, area.y, &Line::from(head), area.width);
 
-    let all = rows(view);
-    let start = first_row_of(&all, view.ui.scroll);
+    let all = rows(view.engine);
+    // `ui.scroll` is a rendered-row offset into `all` (Finding 5); `clamp` keeps it in bounds.
+    let start = view.ui.scroll.min(all.len());
     let ipinfo = !cfg.ipinfo_fields.is_empty();
     for (i, row) in all
         .iter()
@@ -346,12 +332,12 @@ mod tests {
     #[test]
     fn rows_follow_display_range_with_extras_and_mpls() {
         let f = view_fixture();
-        let r = rows(&f.view());
+        let r = rows(&f.engine);
         assert_eq!(r.iter().map(|r| r.at).collect::<Vec<_>>(), vec![0, 1, 2]);
         assert!(r.iter().all(|r| matches!(r.kind, RowKind::Hop)));
 
         let mut f = ecmp_fixture(8);
-        let r = rows(&f.view());
+        let r = rows(&f.engine);
         assert!(
             matches!(
                 r[..],
@@ -371,7 +357,7 @@ mod tests {
         // primary addr is the latest responder (10.0.0.2); the extra row is addrs[0] = 10.0.0.1
         f.engine
             .handle(Event::Action(mtr_core::UserAction::ToggleMpls), f.now);
-        let r = rows(&f.view());
+        let r = rows(&f.engine);
         assert!(
             matches!(
                 r[..],
@@ -392,7 +378,6 @@ mod tests {
             ),
             "{r:?}"
         );
-        assert_eq!(first_row_of(&r, 0), 0);
     }
 
     #[test]
@@ -401,21 +386,21 @@ mod tests {
         let f = ecmp_fixture(1);
         assert!(
             matches!(
-                rows(&f.view())[..],
+                rows(&f.engine)[..],
                 [TableRow {
                     at: 0,
                     kind: RowKind::Hop
                 }]
             ),
             "{:?}",
-            rows(&f.view())
+            rows(&f.engine)
         );
         // an engine with no replies yet has an empty display range → no rows
         let fresh = Fixture::around(
             Engine::new(Config::default(), ip("192.0.2.10"), None, Instant::now(), 1),
             Instant::now(),
         );
-        assert!(rows(&fresh.view()).is_empty(), "no hops yet");
+        assert!(rows(&fresh.engine).is_empty(), "no hops yet");
     }
 
     #[test]
@@ -480,6 +465,57 @@ mod tests {
         let c = columns(&f.view(), 60);
         assert_eq!(c.spark, 0, "no room for a sparkline at 60 columns: {c:?}");
         assert!(c.num + c.host + c.stats <= 60, "{c:?}");
+    }
+
+    /// Finding 5: hops 1 and 2 each answer from 8 ECMP addresses, so hop 3's row sits at expanded
+    /// offset 16 — below a 12-row viewport. Selecting hop 3 must scroll the table (in rendered
+    /// rows, not hops) so its row is actually drawn; scrolling used to count hops and leave the
+    /// selected hop off-screen while the detail pane showed it.
+    #[test]
+    fn a_lower_hop_stays_visible_when_ecmp_rows_exceed_the_viewport() {
+        use crate::tui::render::bounds;
+        let cfg = Config {
+            max_ttl: 3,
+            max_ping: 8,
+            force_max_ping: true,
+            grace_time: 0.1,
+            ..Config::default()
+        };
+        let (engine, end) = drive(cfg, |ttl, cycle| match ttl {
+            1 => Answer::Reply {
+                addr: ip(&format!("10.0.0.{cycle}")),
+                rtt_us: 1000,
+                mpls: vec![],
+            },
+            2 => Answer::Reply {
+                addr: ip(&format!("10.0.1.{cycle}")),
+                rtt_us: 2000,
+                mpls: vec![],
+            },
+            _ => Answer::Reply {
+                addr: ip("192.0.2.10"),
+                rtt_us: 3000,
+                mpls: vec![],
+            },
+        });
+        let mut f = Fixture::around(engine, end + Duration::from_secs(1));
+        // The expanded table (8 + 8 + 1 rows) is taller than the 80x24 viewport (12 table rows).
+        assert!(rows(&f.engine).len() > 12, "{}", rows(&f.engine).len());
+        let screen = Rect::new(0, 0, 80, 24);
+        let b = bounds(screen, &f.engine, &f.ui);
+        assert_eq!(b.visible_rows, 12, "80x24 with the detail pane");
+        // Select the last hop and let the reducer place the scroll.
+        f.ui.selected = 2;
+        f.ui.clamp(&b);
+        let table_area = Rect::new(0, 0, 80, (b.visible_rows + 1) as u16);
+        let mut buf = Buffer::empty(table_area);
+        render(&f.view(), table_area, &mut buf);
+        let rendered: Vec<String> = (0..table_area.height).map(|y| row_text(&buf, y)).collect();
+        assert!(
+            rendered.iter().any(|l| l.contains("3. 192.0.2.10")),
+            "hop 3 must be on screen; got:\n{}",
+            rendered.join("\n")
+        );
     }
 
     #[test]

@@ -302,6 +302,18 @@ pub async fn run(argv: Vec<String>) -> i32 {
     exit_val
 }
 
+/// The device the helper should bind for `-I`, kept separate from the interface used to resolve
+/// the source address (Finding 2). Only Linux binds a device (`SO_BINDTODEVICE`, for policy
+/// routing); the BSDs route by the resolved source address alone, and FreeBSD's helper rejects a
+/// device option with `EINVAL`, so forwarding it there fails every `-I` trace.
+fn device_for_helper(interface: Option<String>) -> Option<String> {
+    if cfg!(target_os = "linux") {
+        interface
+    } else {
+        None
+    }
+}
+
 async fn run_target(
     opts: &Options,
     rt: &ResolvedTarget<'_>,
@@ -317,6 +329,10 @@ async fn run_target(
         (None, Some(ifname)) => Some(target::interface_address(ifname, ip.is_ipv6())?),
         (None, None) => target::find_local_address(ip, cfg.mark)?,
     };
+    // Finding 2: `-I` is now resolved to the source address above. Only forward the interface to
+    // the helper as a device to bind where the helper can honour it; FreeBSD rejects the device
+    // option outright, which would fail every `-I` trace on its first probe.
+    cfg.interface = device_for_helper(cfg.interface);
     let local_hostname = target::local_hostname();
     let mut helper = helper::spawn(ip.is_ipv6(), cfg.protocol, cfg.mark)
         .await
@@ -324,11 +340,12 @@ async fn run_target(
     if opts.mode == OutputMode::Report {
         println!("{}", emit::report::start_line(&jiff::Zoned::now()));
     }
-    let mut resolver = if cfg.dns || !cfg.ipinfo_fields.is_empty() {
-        Some(Resolver::start(ResolverConfig {
-            provider4: opts.ipinfo_provider4.clone(),
-            provider6: opts.ipinfo_provider6.clone(),
-        })?)
+    let resolver_config = ResolverConfig {
+        provider4: opts.ipinfo_provider4.clone(),
+        provider6: opts.ipinfo_provider6.clone(),
+    };
+    let resolver = if cfg.dns || !cfg.ipinfo_fields.is_empty() {
+        Some(Resolver::start(resolver_config.clone())?)
     } else {
         None
     };
@@ -339,7 +356,13 @@ async fn run_target(
         .unwrap_or(1);
     let mut engine = Engine::new(cfg, ip, local, Instant::now(), seed);
     let interrupted = {
-        let mut driver = Driver::new(&mut engine, &mut helper, resolver.as_mut(), &mut names);
+        let mut driver = Driver::new(
+            &mut engine,
+            &mut helper,
+            resolver,
+            resolver_config,
+            &mut names,
+        );
         let outcome = if opts.mode == OutputMode::Tui {
             let guard = tui::terminal::enter().map_err(|e| format!("terminal: {e}"))?;
             // Only once, and only with a live Guard: the hook restores the terminal, which is a
@@ -416,11 +439,28 @@ async fn run_target(
 
 #[cfg(test)]
 mod tests {
+    use super::device_for_helper;
+
     fn temp(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("mtr-rs-log-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("mtr.log")
+    }
+
+    /// Finding 2: the resolved `-I` interface reaches the helper as a device only on Linux; on the
+    /// BSDs it must be dropped (FreeBSD rejects it, and the source address already routes).
+    #[test]
+    fn device_for_helper_matches_platform_support() {
+        if cfg!(target_os = "linux") {
+            assert_eq!(
+                device_for_helper(Some("eth0".into())),
+                Some("eth0".to_string())
+            );
+        } else {
+            assert_eq!(device_for_helper(Some("lo0".into())), None);
+        }
+        assert_eq!(device_for_helper(None), None);
     }
 
     #[test]
