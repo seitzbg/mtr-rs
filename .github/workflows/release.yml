@@ -181,10 +181,10 @@ jobs:
           key="$RUNNER_TEMP/AuthKey.p8"
           printf '%s\n' "$API_KEY" > "$key"
           # notarytool takes a zip; the ticket is per code-signature, so the tarball's binaries
-          # are covered by notarizing the same files here.
+          # are covered by notarizing the same files here. Apple has taken up to half an hour.
           ditto -c -k --keepParent "$(cat dist-dir.txt)/bin" "$RUNNER_TEMP/notarize.zip"
           xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --key "$key" --key-id "$API_KEY_ID" \
-            --issuer "$API_ISSUER" --wait --timeout 30m --output-format json > "$RUNNER_TEMP/notary.json"
+            --issuer "$API_ISSUER" --wait --timeout 90m --output-format json > "$RUNNER_TEMP/notary.json"
           cat "$RUNNER_TEMP/notary.json"
           status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$RUNNER_TEMP/notary.json")
           id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$RUNNER_TEMP/notary.json")
@@ -194,8 +194,9 @@ jobs:
             exit 1
           fi
           rm -f "$key"
-          # Gatekeeper's own verdict for a downloaded executable, now that the ticket exists.
-          spctl --assess --type execute --verbose=2 "$(cat dist-dir.txt)/bin/mtr-rs"
+          # No spctl check here: `spctl --assess --type execute` rejects any standalone executable
+          # as "not an app", notarized or not. `codesign --verify` above is the local check; the
+          # ticket itself is what Gatekeeper consults online on a user's Mac.
       - name: Remove the signing keychain
         if: always() && steps.apple.outputs.present == 'true'
         run: |

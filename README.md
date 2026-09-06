@@ -59,7 +59,6 @@ each file, so a download can be checked against what the release workflow actual
     sha256sum -c --ignore-missing SHA256SUMS                 # shasum -a 256 -c on macOS
     gh attestation verify mtr-rs-0.3.0-x86_64-linux.tar.gz --repo seitzbg/mtr-rs
     codesign --verify --strict --verbose=2 bin/mtr-rs        # macOS: Developer ID signature
-    spctl --assess --type execute --verbose=2 bin/mtr-rs     # macOS: Gatekeeper's verdict (notarized)
 
 Neither package declares a conflict with the distribution's `mtr`, so it can stay installed.
 `--uninstall` removes exactly what it installed, given the same `--prefix`. A failing privilege
