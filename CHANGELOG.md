@@ -6,6 +6,13 @@ All notable changes to mtr-rs are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-09-07
+
+### Fixed
+- The FreeBSD amd64 package built on 14.3 was rejected by `pkg` on FreeBSD 15 even though
+  the binaries run there. The package ABI now wildcards the OS version while retaining the
+  CPU architecture, and the packaging check compares that ABI literally.
+
 ## [0.4.2] - 2026-09-06
 
 ### Fixed
@@ -197,7 +204,8 @@ First release of the Rust port of mtr 0.96 (upstream commit 7b01773).
 - GitHub Actions pinned to commit SHAs, read-only tokens except for the release publish step, and
   cargo-deny in CI.
 
-[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/seitzbg/mtr-rs/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/seitzbg/mtr-rs/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/seitzbg/mtr-rs/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/seitzbg/mtr-rs/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/seitzbg/mtr-rs/compare/v0.3.0...v0.4.0
