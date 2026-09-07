@@ -16,7 +16,7 @@ done
 cargo xtask dist --no-build >/dev/null
 
 version=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-abi=$(pkg config ABI)
+abi=$(pkg config ABI | sed -E 's/^([^:]+):[^:]+:/\1:*:/')
 stage=target/freebsd/stage
 out=target/freebsd
 rm -rf "$stage"
@@ -50,6 +50,7 @@ tar tvf "$pkgfile" | grep -E ' /usr/local/bin/mtr-rs$' | grep -qv 'rws' || { ech
 info=$(pkg info -F "$pkgfile")
 echo "$info" | grep -q "^Version *: $version\$" || { echo "wrong version in package" >&2; echo "$info" >&2; exit 1; }
 echo "$info" | grep -q '^Licenses *: GPLv2' || { echo "licence missing" >&2; echo "$info" >&2; exit 1; }
-echo "$info" | grep -q "^Architecture *: $abi\$" || { echo "wrong ABI in package" >&2; echo "$info" >&2; exit 1; }
+actual_abi=$(echo "$info" | sed -n 's/^Architecture *: //p')
+[ "$actual_abi" = "$abi" ] || { echo "wrong ABI in package" >&2; echo "$info" >&2; exit 1; }
 echo "pkg ok"
 echo "$pkgfile"

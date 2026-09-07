@@ -25,22 +25,22 @@ sockets are open).
     sudo chmod u+s "$(brew --prefix)/opt/mtr-rs/bin/mtr-rs-packet"
 
     # macOS: tarball (the binaries are signed and notarized, so Gatekeeper lets them run)
-    tar xzf mtr-rs-0.4.2-aarch64-macos.tar.gz && cd mtr-rs-0.4.2-aarch64-macos
+    tar xzf mtr-rs-0.4.3-aarch64-macos.tar.gz && cd mtr-rs-0.4.3-aarch64-macos
     sudo install -m 755 bin/mtr-rs bin/mtr-rs-packet /usr/local/bin/
     sudo install -m 644 man/*.8 /usr/local/share/man/man8/
     sudo chown root:wheel /usr/local/bin/mtr-rs-packet && sudo chmod u+s /usr/local/bin/mtr-rs-packet
 
     # Linux: tarball
-    tar xzf mtr-rs-0.4.2-x86_64-linux.tar.gz && cd mtr-rs-0.4.2-x86_64-linux
+    tar xzf mtr-rs-0.4.3-x86_64-linux.tar.gz && cd mtr-rs-0.4.3-x86_64-linux
     sudo install -m 755 bin/mtr-rs bin/mtr-rs-packet /usr/local/bin/
     sudo install -m 644 man/*.8 /usr/local/share/man/man8/
     sudo setcap cap_net_raw+ep /usr/local/bin/mtr-rs-packet
 
     # Linux: Debian package, setcap from its postinst
-    sudo dpkg -i mtr-rs_0.4.2-1_amd64.deb
+    sudo dpkg -i mtr-rs_0.4.3-1_amd64.deb
 
     # FreeBSD: package, mtr-rs-packet setuid root (or the tarball, as for macOS)
-    sudo pkg add mtr-rs-0.4.2-x86_64-freebsd.pkg
+    sudo pkg add mtr-rs-0.4.3-x86_64-freebsd.pkg
 
     # from a checkout, with man pages and bash/zsh/fish completions
     cargo build --release --workspace && cargo xtask dist
@@ -57,7 +57,7 @@ Every release also carries a `SHA256SUMS` asset and a GitHub build-provenance at
 each file, so a download can be checked against what the release workflow actually built:
 
     sha256sum -c --ignore-missing SHA256SUMS                 # shasum -a 256 -c on macOS
-    gh attestation verify mtr-rs-0.4.2-x86_64-linux.tar.gz --repo seitzbg/mtr-rs
+    gh attestation verify mtr-rs-0.4.3-x86_64-linux.tar.gz --repo seitzbg/mtr-rs
     codesign --verify --strict --verbose=2 bin/mtr-rs        # macOS: Developer ID signature
 
 Neither package declares a conflict with the distribution's `mtr`, so it can stay installed.
@@ -208,7 +208,7 @@ Deliberate differences, each with a code comment citing the C source:
     cargo xtask man          # target/dist/man/
     cargo xtask completions  # target/dist/completions/ (bash, zsh, fish)
     cargo xtask dist         # both, plus a release build, under target/dist/
-    scripts/homebrew-formula.sh 0.4.2   # the Homebrew formula for a published release (seitzbg/homebrew-mtr-rs)
+    scripts/homebrew-formula.sh 0.4.3   # the Homebrew formula for a published release (seitzbg/homebrew-mtr-rs)
 
 The upstream Python suites run unmodified against our helper. `--compare` fails only on failures
 that are ours alone; `param.py` and `probe.py` want `cap_net_raw` on the C repo's listener too, and
